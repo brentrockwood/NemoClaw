@@ -26,6 +26,7 @@ extensions = [
     "sphinxcontrib.mermaid",
     "sphinx_llm.txt",
     "json_output",
+    "search_assets",
 ]
 
 autodoc_default_options = {

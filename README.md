@@ -136,13 +136,74 @@ When something goes wrong, errors may originate from either NemoClaw or the Open
 
 ## Inference
 
-Inference requests from the agent never leave the sandbox directly. OpenShell intercepts every call and routes it to the NVIDIA cloud provider.
+Inference requests from the agent never leave the sandbox directly. OpenShell intercepts every call and routes it to the configured provider.
 
 | Provider     | Model                               | Use Case                                       |
 |--------------|--------------------------------------|-------------------------------------------------|
 | NVIDIA cloud | `nvidia/nemotron-3-super-120b-a12b` | Production. Requires an NVIDIA API key.         |
+| Ollama       | Any locally pulled model (e.g. `llama3.1:8b`) | Local or remote inference. No API key required. |
 
-Get an API key from [build.nvidia.com](https://build.nvidia.com). The `nemoclaw onboard` command prompts for this key during setup.
+Get an NVIDIA API key from [build.nvidia.com](https://build.nvidia.com). The `nemoclaw onboard` command prompts for this key during setup.
+
+---
+
+## Using a Local or Remote Ollama Instance
+
+NemoClaw supports [Ollama](https://ollama.com/) as a first-class inference provider. No API key is required.
+
+### Prerequisites
+
+- [Ollama installed](https://ollama.com/download) and running (`ollama serve`)
+- At least one model pulled: `ollama pull llama3.1:8b`
+- [OpenShell installed](https://github.com/NVIDIA/OpenShell)
+
+### Onboard with Ollama
+
+For a local Ollama instance (default `http://localhost:11434`):
+
+```bash
+nemoclaw onboard --endpoint ollama
+```
+
+For a remote Ollama endpoint:
+
+```bash
+nemoclaw onboard --endpoint ollama --ollama-url http://ai-server.example.com:11434
+```
+
+For non-interactive scripted setup, set `OLLAMA_BASE_URL` before onboarding:
+
+```bash
+export OLLAMA_BASE_URL=http://ai-server.example.com:11434
+nemoclaw onboard --endpoint ollama --non-interactive --model llama3.1:8b
+```
+
+### Launch with the Ollama profile
+
+```bash
+openclaw nemoclaw launch --profile ollama
+```
+
+This creates the sandbox, configures the Ollama provider, and applies the Ollama egress network policy. The sandbox can then reach your Ollama endpoint on port 11434.
+
+### End-to-end verification
+
+```bash
+# 1. Onboard
+nemoclaw onboard --endpoint ollama --model llama3.1:8b
+
+# 2. Launch
+openclaw nemoclaw launch --profile ollama
+
+# 3. Connect to the sandbox
+nemoclaw connect
+
+# 4. From inside the sandbox, send an inference request
+openclaw agent --local -m "say hello"
+
+# 5. Check status
+openclaw nemoclaw status
+```
 
 ---
 

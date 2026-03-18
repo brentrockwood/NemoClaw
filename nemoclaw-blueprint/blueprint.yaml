@@ -18,6 +18,7 @@ profiles:
   - ncp
   - nim-local
   - vllm
+  - ollama
 
 description: |
   NemoClaw blueprint: orchestrates OpenClaw sandbox creation, migration,
@@ -68,6 +69,15 @@ components:
         credential_default: "dummy"
         timeout_secs: 180
 
+      ollama:
+        provider_type: "ollama"
+        provider_name: "ollama-local"
+        endpoint: ""
+        model: ""
+        credential_env: "OPENAI_API_KEY"
+        credential_default: "ollama"
+        dynamic_endpoint: true
+
   policy:
     base: "sandboxes/openclaw/policy.yaml"
     additions:
@@ -77,3 +87,13 @@ components:
           - host: "nim-service.local"
             port: 8000
             access: full
+
+      # Ollama egress: host is resolved from OLLAMA_BASE_URL at plan time.
+      # Active only when the ollama profile is selected.
+      ollama_service:
+        name: ollama_service
+        endpoints:
+          - host: "${OLLAMA_HOST}"
+            port: 11434
+            protocol: rest
+        profiles: [ollama]

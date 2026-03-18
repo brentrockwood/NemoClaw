@@ -1,0 +1,27 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Ollama inference server access.
+#
+# Default host is localhost. For a remote Ollama endpoint, copy this file
+# and replace the host value, or apply the ollama_service policy addition
+# from blueprint.yaml which resolves the host from OLLAMA_BASE_URL at
+# apply time.
+
+preset:
+  name: ollama
+  description: "Ollama local or remote inference server (port 11434)"
+
+network_policies:
+  ollama_server:
+    name: ollama_server
+    endpoints:
+      - host: localhost
+        port: 11434
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/api/**" }
+          - allow: { method: POST, path: "/api/**" }
+          - allow: { method: GET, path: "/v1/**" }
+          - allow: { method: POST, path: "/v1/**" }

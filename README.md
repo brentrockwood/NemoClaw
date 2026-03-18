@@ -174,6 +174,56 @@ Join the NemoClaw community to ask questions, share feedback, and report issues.
 - [GitHub Discussions](https://github.com/NVIDIA/NemoClaw/discussions)
 - [GitHub Issues](https://github.com/NVIDIA/NemoClaw/issues)
 
+## Using a Local or Remote Ollama Instance
+
+NemoClaw supports [Ollama](https://ollama.com/) as a first-class inference provider. No API key is required.
+
+### Prerequisites
+
+- [Ollama installed](https://ollama.com/download) and running (`ollama serve`)
+- At least one model pulled: `ollama pull llama3.1:8b`
+- [OpenShell installed](https://github.com/NVIDIA/OpenShell)
+
+### Onboard with Ollama
+
+For a local Ollama instance (default `http://localhost:11434`):
+
+```bash
+nemoclaw onboard --endpoint ollama
+```
+
+For a remote Ollama endpoint:
+
+```bash
+nemoclaw onboard --endpoint ollama --ollama-url http://ai-server.example.com:11434
+```
+
+For non-interactive scripted setup, set `OLLAMA_BASE_URL` before onboarding:
+
+```bash
+export OLLAMA_BASE_URL=http://ai-server.example.com:11434
+nemoclaw onboard --endpoint ollama --non-interactive --model llama3.1:8b
+```
+
+### End-to-end verification
+
+```bash
+# 1. Onboard
+nemoclaw onboard --endpoint ollama --model llama3.1:8b
+
+# 2. Launch
+nemoclaw start
+
+# 3. Connect to the sandbox
+nemoclaw connect
+
+# 4. From inside the sandbox, send an inference request
+openclaw agent --local -m "say hello"
+
+# 5. Check status
+openclaw nemoclaw status
+```
+
 ## Contributing
 
 We welcome contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and the PR process.

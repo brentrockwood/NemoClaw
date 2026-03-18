@@ -72,6 +72,39 @@ def openshell_available() -> bool:
     return shutil.which("openshell") is not None
 
 
+def normalize_v1(url: str) -> str:
+    """Ensure a base URL ends with /v1."""
+    trimmed = url.rstrip("/")
+    return trimmed if trimmed.endswith("/v1") else f"{trimmed}/v1"
+
+
+def resolve_dynamic_endpoint(provider_type: str) -> str:
+    """Resolve a dynamic inference endpoint from environment variables.
+
+    For ollama: reads OLLAMA_BASE_URL, defaulting to http://localhost:11434.
+    For other dynamic providers: reads OPENAI_BASE_URL.
+    Always appends /v1 if not already present.
+    """
+    if provider_type == "ollama":
+        raw = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        return normalize_v1(raw)
+    raw = os.environ.get("OPENAI_BASE_URL", "")
+    return normalize_v1(raw) if raw else ""
+
+
+def resolve_ollama_host(endpoint: str) -> str:
+    """Extract the hostname from an Ollama endpoint URL.
+
+    Used to substitute the ${OLLAMA_HOST} placeholder in policy additions.
+    """
+    # Strip scheme and path; keep host[:port]
+    stripped = endpoint.removeprefix("https://").removeprefix("http://")
+    # Remove /v1 or any path suffix
+    host_port = stripped.split("/")[0]
+    # Return just the hostname without port for policy host matching
+    return host_port.split(":")[0] if ":" in host_port else host_port
+
+
 # ---------------------------------------------------------------------------
 # Actions
 # ---------------------------------------------------------------------------
@@ -105,9 +138,34 @@ def action_plan(
     sandbox_cfg: dict[str, Any] = blueprint.get("components", {}).get("sandbox", {})
     inference_cfg: dict[str, Any] = inference_profiles[profile]
 
-    # Override endpoint if provided (e.g., NCP dynamic endpoint)
+    # Override endpoint if provided via CLI, otherwise resolve dynamic endpoints
     if endpoint_url:
         inference_cfg = {**inference_cfg, "endpoint": endpoint_url}
+    elif inference_cfg.get("dynamic_endpoint"):
+        provider_type_for_plan: str = inference_cfg.get("provider_type", "openai")
+        resolved = resolve_dynamic_endpoint(provider_type_for_plan)
+        if resolved:
+            inference_cfg = {**inference_cfg, "endpoint": resolved}
+
+    # Resolve credential value for plan output
+    cred_env = inference_cfg.get("credential_env")
+    cred_default: str = inference_cfg.get("credential_default", "")
+    resolved_credential = os.environ.get(cred_env, cred_default) if cred_env else cred_default
+
+    # Resolve ${OLLAMA_HOST} placeholder in policy additions
+    raw_additions: dict[str, Any] = (
+        blueprint.get("components", {}).get("policy", {}).get("additions", {})
+    )
+    endpoint_for_policy: str = inference_cfg.get("endpoint", "")
+    resolved_additions: dict[str, Any] = {}
+    for key, addition in raw_additions.items():
+        resolved_eps = []
+        for ep in addition.get("endpoints", []):
+            host = str(ep.get("host", ""))
+            if "${OLLAMA_HOST}" in host and endpoint_for_policy:
+                ep = {**ep, "host": resolve_ollama_host(endpoint_for_policy)}
+            resolved_eps.append(ep)
+        resolved_additions[key] = {**addition, "endpoints": resolved_eps}
 
     plan: dict[str, Any] = {
         "run_id": rid,
@@ -123,10 +181,9 @@ def action_plan(
             "endpoint": inference_cfg.get("endpoint"),
             "model": inference_cfg.get("model"),
             "credential_env": inference_cfg.get("credential_env"),
+            "credential": resolved_credential,
         },
-        "policy_additions": (
-            blueprint.get("components", {}).get("policy", {}).get("additions", {})
-        ),
+        "policy_additions": resolved_additions,
         "dry_run": dry_run,
     }
 
@@ -154,9 +211,14 @@ def action_apply(
     )
     inference_cfg: dict[str, Any] = inference_profiles.get(profile, {})
 
-    # Override endpoint if provided (e.g., NCP dynamic endpoint)
+    # Override endpoint if provided via CLI, otherwise resolve dynamic endpoints
     if endpoint_url:
         inference_cfg = {**inference_cfg, "endpoint": endpoint_url}
+    elif inference_cfg.get("dynamic_endpoint"):
+        provider_type_for_apply: str = inference_cfg.get("provider_type", "openai")
+        resolved = resolve_dynamic_endpoint(provider_type_for_apply)
+        if resolved:
+            inference_cfg = {**inference_cfg, "endpoint": resolved}
 
     sandbox_cfg: dict[str, Any] = blueprint.get("components", {}).get("sandbox", {})
 
@@ -200,6 +262,9 @@ def action_apply(
     if credential_env:
         credential = os.environ.get(credential_env, credential_default)
 
+    # Determine correct config key for the provider's base URL
+    config_key = "OLLAMA_BASE_URL" if provider_type == "ollama" else "OPENAI_BASE_URL"
+
     provider_args = [
         "openshell",
         "provider",
@@ -212,7 +277,7 @@ def action_apply(
     if credential:
         provider_args.extend(["--credential", f"OPENAI_API_KEY={credential}"])
     if endpoint:
-        provider_args.extend(["--config", f"OPENAI_BASE_URL={endpoint}"])
+        provider_args.extend(["--config", f"{config_key}={endpoint}"])
 
     run_cmd(provider_args, check=False, capture=True)
 

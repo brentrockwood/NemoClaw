@@ -4,6 +4,8 @@
 import { execFileSync, execSync } from "node:child_process";
 import type { PluginLogger, NemoClawConfig } from "../index.js";
 import {
+  describeOnboardEndpoint,
+  describeOnboardProvider,
   loadOnboardConfig,
   saveOnboardConfig,
   type EndpointType,
@@ -34,10 +36,13 @@ const HOST_GATEWAY_URL = "http://host.openshell.internal";
 
 const DEFAULT_MODELS = [
   { id: "nvidia/nemotron-3-super-120b-a12b", label: "Nemotron 3 Super 120B" },
-  { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1", label: "Nemotron Ultra 253B" },
-  { id: "nvidia/llama-3.3-nemotron-super-49b-v1.5", label: "Nemotron Super 49B v1.5" },
-  { id: "nvidia/nemotron-3-nano-30b-a3b", label: "Nemotron 3 Nano 30B" },
+  { id: "moonshotai/kimi-k2.5", label: "Kimi K2.5" },
+  { id: "z-ai/glm5", label: "GLM-5" },
+  { id: "minimaxai/minimax-m2.5", label: "MiniMax M2.5" },
+  { id: "qwen/qwen3.5-397b-a17b", label: "Qwen3.5 397B A17B" },
+  { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B" },
 ];
+const DEFAULT_OLLAMA_MODEL = "nemotron-3-nano:30b";
 
 function resolveProfile(endpointType: EndpointType): string {
   switch (endpointType) {
@@ -133,6 +138,32 @@ function detectOllama(): { installed: boolean; running: boolean } {
   return { installed, running };
 }
 
+function parseOllamaList(output: string): string[] {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^NAME\s+/i.test(line))
+    .map((line) => line.split(/\s{2,}/)[0])
+    .filter(Boolean);
+}
+
+function getOllamaModelOptions(): string[] {
+  try {
+    const output = execSync("ollama list", { encoding: "utf-8", shell: "/bin/bash" });
+    const parsed = parseOllamaList(output);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  } catch {}
+  return [DEFAULT_OLLAMA_MODEL];
+}
+
+function getDefaultOllamaModel(): string {
+  const models = getOllamaModelOptions();
+  return models.includes(DEFAULT_OLLAMA_MODEL) ? DEFAULT_OLLAMA_MODEL : models[0];
+}
+
 function testCommand(command: string): boolean {
   try {
     execSync(command, { encoding: "utf-8", stdio: "ignore", shell: "/bin/bash" });
@@ -143,7 +174,8 @@ function testCommand(command: string): boolean {
 }
 
 function showConfig(config: NemoClawOnboardConfig, logger: PluginLogger): void {
-  logger.info(`  Endpoint:    ${config.endpointType} (${config.endpointUrl})`);
+  logger.info(`  Endpoint:    ${describeOnboardEndpoint(config)}`);
+  logger.info(`  Provider:    ${describeOnboardProvider(config)}`);
   if (config.ncpPartner) {
     logger.info(`  NCP Partner: ${config.ncpPartner}`);
   }
@@ -248,6 +280,7 @@ export async function cliOnboard(opts: OnboardOptions): Promise<void> {
     } else {
       endpointType = await promptEndpoint(ollama);
     }
+    endpointType = await promptEndpoint(ollama);
   }
 
   // Step 2: Endpoint URL resolution
@@ -376,11 +409,24 @@ export async function cliOnboard(opts: OnboardOptions): Promise<void> {
   // Step 6: Resolve profile
   const profile = resolveProfile(endpointType);
   const providerName = resolveProviderName(endpointType);
+  const summaryConfig: NemoClawOnboardConfig = {
+    endpointType,
+    endpointUrl,
+    ncpPartner,
+    model,
+    profile,
+    credentialEnv,
+    provider: providerName,
+    providerLabel: undefined,
+    onboardedAt: "",
+  };
+  summaryConfig.providerLabel = describeOnboardProvider(summaryConfig);
 
   // Step 7: Confirmation
   logger.info("");
   logger.info("Configuration summary:");
-  logger.info(`  Endpoint:    ${endpointType} (${endpointUrl})`);
+  logger.info(`  Endpoint:    ${describeOnboardEndpoint(summaryConfig)}`);
+  logger.info(`  Provider:    ${summaryConfig.providerLabel}`);
   if (ncpPartner) {
     logger.info(`  NCP Partner: ${ncpPartner}`);
   }
@@ -468,6 +514,8 @@ export async function cliOnboard(opts: OnboardOptions): Promise<void> {
     model,
     profile,
     credentialEnv,
+    provider: providerName,
+    providerLabel: summaryConfig.providerLabel,
     onboardedAt: new Date().toISOString(),
   });
 
@@ -475,7 +523,8 @@ export async function cliOnboard(opts: OnboardOptions): Promise<void> {
   logger.info("");
   logger.info("Onboarding complete!");
   logger.info("");
-  logger.info(`  Endpoint:   ${endpointUrl}`);
+  logger.info(`  Endpoint:   ${describeOnboardEndpoint(summaryConfig)}`);
+  logger.info(`  Provider:   ${summaryConfig.providerLabel}`);
   logger.info(`  Model:      ${model}`);
   logger.info(`  Credential: $${credentialEnv}`);
   logger.info("");

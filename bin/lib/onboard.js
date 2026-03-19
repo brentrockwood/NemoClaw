@@ -332,7 +332,7 @@ async function createSandbox(gpu) {
 
 // ── Step 4: NIM ──────────────────────────────────────────────────
 
-async function setupNim(sandboxName, gpu) {
+async function setupNim(sandboxName, gpu, opts) {
   step(4, 7, "Configuring inference (NIM)");
 
   let model = null;
@@ -343,8 +343,10 @@ async function setupNim(sandboxName, gpu) {
   const hasOllama = !!runCapture("command -v ollama", { ignoreError: true });
   const ollamaRunning = !!runCapture("curl -sf http://localhost:11434/api/tags 2>/dev/null", { ignoreError: true });
   const vllmRunning = !!runCapture("curl -sf http://localhost:8000/v1/models 2>/dev/null", { ignoreError: true });
-  const requestedProvider = isNonInteractive() ? getNonInteractiveProvider() : null;
-  const requestedModel = isNonInteractive() ? getNonInteractiveModel(requestedProvider || "cloud") : null;
+  // --endpoint flag takes priority over NEMOCLAW_PROVIDER env var
+  const requestedProvider = opts.endpoint || (isNonInteractive() ? getNonInteractiveProvider() : null);
+  // --model flag takes priority over NEMOCLAW_MODEL env var
+  const requestedModel = opts.model || (isNonInteractive() ? getNonInteractiveModel(requestedProvider || "cloud") : null);
 
   // Auto-select only with NEMOCLAW_EXPERIMENTAL=1 (prevents silent misconfiguration)
   if (EXPERIMENTAL) {
@@ -364,17 +366,19 @@ async function setupNim(sandboxName, gpu) {
     }
   }
 
-  // Non-interactive: honor NEMOCLAW_PROVIDER before building interactive options
-  if (isNonInteractive() && requestedProvider) {
+  // Non-interactive or flag-driven: honor --endpoint / NEMOCLAW_PROVIDER
+  if (requestedProvider) {
     const providerKey = requestedProvider;
-    console.log(`  [non-interactive] Provider: ${providerKey}`);
+    if (isNonInteractive()) console.log(`  [non-interactive] Provider: ${providerKey}`);
     if (providerKey === "ollama") {
-      if (!ollamaRunning) {
-        console.error("  Ollama is not running on localhost:11434. Start it first.");
-        process.exit(1);
+      // Warn if local Ollama is not running, but allow a remote URL to proceed
+      const hasRemoteUrl = !!(opts.endpointUrl || process.env.OLLAMA_BASE_URL);
+      if (!ollamaRunning && !hasRemoteUrl) {
+        console.warn("  Warning: Ollama is not running on localhost:11434 and no remote URL provided.");
+        console.warn("  Start Ollama or set --ollama-url / OLLAMA_BASE_URL before running nemoclaw start.");
       }
       provider = "ollama-local";
-      model = requestedModel || "nemotron-3-nano";
+      model = requestedModel || "llama3.1:8b";
       registry.updateSandbox(sandboxName, { model, provider, nimContainer });
       return { model, provider };
     } else if (providerKey === "vllm") {
@@ -399,15 +403,13 @@ async function setupNim(sandboxName, gpu) {
     // "cloud" or "nim" fall through to normal flow below
   }
 
-  // Build options list — only show local options with NEMOCLAW_EXPERIMENTAL=1
+  // Build options list
   const options = [];
   if (EXPERIMENTAL && gpu && gpu.nimCapable) {
     options.push({ key: "nim", label: "Local NIM container (NVIDIA GPU) [experimental]" });
   }
   options.push({ key: "cloud", label: "NVIDIA Cloud API (build.nvidia.com)" });
-  if (EXPERIMENTAL && (hasOllama || ollamaRunning)) {
-    options.push({ key: "ollama", label: `Local Ollama (localhost:11434)${ollamaRunning ? " — running" : ""} [experimental]` });
-  }
+  options.push({ key: "ollama", label: `Ollama — local or remote${ollamaRunning ? " (localhost detected)" : ""}` });
   if (EXPERIMENTAL && vllmRunning) {
     options.push({ key: "vllm", label: "Existing vLLM instance (localhost:8000) — running [experimental]" });
   }
@@ -490,14 +492,13 @@ async function setupNim(sandboxName, gpu) {
         }
       }
     } else if (selected.key === "ollama") {
-      if (!ollamaRunning) {
-        console.log("  Starting Ollama...");
-        run("OLLAMA_HOST=0.0.0.0:11434 ollama serve > /dev/null 2>&1 &", { ignoreError: true });
-        sleep(2);
-      }
-      console.log("  ✓ Using Ollama on localhost:11434");
+      const defaultUrl = "http://localhost:11434";
+      const urlInput = await prompt(`  Ollama endpoint URL [${defaultUrl}]: `);
+      const rawUrl = (urlInput || defaultUrl).trim();
+      opts.endpointUrl = rawUrl.replace(/\/v1\/?$/, "");
+      console.log(`  ✓ Using Ollama at ${opts.endpointUrl}`);
       provider = "ollama-local";
-      model = "nemotron-3-nano";
+      model = requestedModel || "llama3.1:8b";
     } else if (selected.key === "install-ollama") {
       console.log("  Installing Ollama via Homebrew...");
       run("brew install ollama", { ignoreError: true });
@@ -537,7 +538,13 @@ async function setupNim(sandboxName, gpu) {
 
 // ── Step 5: Inference provider ───────────────────────────────────
 
-async function setupInference(sandboxName, model, provider) {
+function resolveOllamaBaseUrl(opts) {
+  const raw = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || `${HOST_GATEWAY_URL}:11434`;
+  // Ensure exactly one /v1 suffix
+  return raw.replace(/\/v1\/?$/, "") + "/v1";
+}
+
+async function setupInference(sandboxName, model, provider, opts) {
   step(5, 7, "Setting up inference provider");
 
   if (provider === "nvidia-nim") {
@@ -566,18 +573,27 @@ async function setupInference(sandboxName, model, provider) {
       { ignoreError: true }
     );
   } else if (provider === "ollama-local") {
+    const ollamaUrl = resolveOllamaBaseUrl(opts);
     run(
-      `openshell provider create --name ollama-local --type openai ` +
+      `openshell provider create --name ollama-local --type ollama ` +
       `--credential "OPENAI_API_KEY=ollama" ` +
-      `--config "OPENAI_BASE_URL=${HOST_GATEWAY_URL}:11434/v1" 2>&1 || ` +
+      `--config "OLLAMA_BASE_URL=${ollamaUrl}" 2>&1 || ` +
       `openshell provider update ollama-local --credential "OPENAI_API_KEY=ollama" ` +
-      `--config "OPENAI_BASE_URL=${HOST_GATEWAY_URL}:11434/v1" 2>&1 || true`,
+      `--config "OLLAMA_BASE_URL=${ollamaUrl}" 2>&1 || true`,
       { ignoreError: true }
     );
-    run(
-      `openshell inference set --no-verify --provider ollama-local --model ${model} 2>/dev/null || true`,
+    const inferenceOut = runCapture(
+      `openshell inference set --no-verify --provider ollama-local --model "${model}" 2>&1`,
       { ignoreError: true }
     );
+    registry.updateSandbox(sandboxName, { model, provider });
+    if (inferenceOut && /error/i.test(inferenceOut)) {
+      console.warn(`  ⚠ Inference route not configured: ${inferenceOut.trim().split("\n")[0]}`);
+      console.warn(`    Run 'make deploy' in your OpenShell repo to rebuild the gateway, then re-run onboard.`);
+    } else {
+      console.log(`  ✓ Inference route set: ${provider} / ${model}`);
+    }
+    return;
   }
 
   registry.updateSandbox(sandboxName, { model, provider });
@@ -599,10 +615,27 @@ async function setupOpenclaw(sandboxName) {
 
 // ── Step 7: Policy presets ───────────────────────────────────────
 
-async function setupPolicies(sandboxName) {
+function resolveOllamaHost(opts) {
+  const raw = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || "";
+  if (!raw) return "localhost";
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return "localhost";
+  }
+}
+
+async function setupPolicies(sandboxName, provider, opts) {
   step(7, 7, "Policy presets");
 
+  const ollamaHost = provider === "ollama-local" ? resolveOllamaHost(opts) : null;
+
   const suggestions = ["pypi", "npm"];
+  if (provider === "ollama-local") {
+    suggestions.push("ollama");
+    const hostLabel = ollamaHost !== "localhost" ? ` (${ollamaHost})` : "";
+    console.log(`  Auto-detected: Ollama provider → suggesting ollama preset${hostLabel}`);
+  }
 
   // Auto-detect based on env tokens
   if (getCredential("TELEGRAM_BOT_TOKEN")) {
@@ -668,20 +701,11 @@ async function setupPolicies(sandboxName) {
       process.exit(1);
     }
     console.log(`  [non-interactive] Applying policy presets: ${selectedPresets.join(", ")}`);
-    for (const name of selectedPresets) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          policies.applyPreset(sandboxName, name);
-          break;
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (!message.includes("sandbox not found") || attempt === 2) {
-            throw err;
-          }
-          sleep(2);
-        }
-      }
-    }
+    const presetArgs = selectedPresets.map((name) => ({
+      name,
+      vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+    }));
+    policies.applyPresets(sandboxName, presetArgs);
   } else {
     const answer = await prompt(`  Apply suggested presets (${suggestions.join(", ")})? [Y/n/list]: `);
 
@@ -690,19 +714,16 @@ async function setupPolicies(sandboxName) {
       return;
     }
 
+    let chosen = suggestions;
     if (answer.toLowerCase() === "list") {
-      // Let user pick
       const picks = await prompt("  Enter preset names (comma-separated): ");
-      const selected = picks.split(",").map((s) => s.trim()).filter(Boolean);
-      for (const name of selected) {
-        policies.applyPreset(sandboxName, name);
-      }
-    } else {
-      // Apply suggested
-      for (const name of suggestions) {
-        policies.applyPreset(sandboxName, name);
-      }
+      chosen = picks.split(",").map((s) => s.trim()).filter(Boolean);
     }
+    const presetArgs = chosen.map((name) => ({
+      name,
+      vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+    }));
+    policies.applyPresets(sandboxName, presetArgs);
   }
 
   console.log("  ✓ Policies applied");
@@ -745,10 +766,10 @@ async function onboard(opts = {}) {
   const gpu = await preflight();
   await startGateway(gpu);
   const sandboxName = await createSandbox(gpu);
-  const { model, provider } = await setupNim(sandboxName, gpu);
-  await setupInference(sandboxName, model, provider);
+  const { model, provider } = await setupNim(sandboxName, gpu, opts);
+  await setupInference(sandboxName, model, provider, opts);
   await setupOpenclaw(sandboxName);
-  await setupPolicies(sandboxName);
+  await setupPolicies(sandboxName, provider, opts);
   printDashboard(sandboxName, model, provider);
 }
 

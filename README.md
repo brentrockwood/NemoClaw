@@ -178,13 +178,13 @@ export OLLAMA_BASE_URL=http://ai-server.example.com:11434
 nemoclaw onboard --endpoint ollama --non-interactive --model llama3.1:8b
 ```
 
-### Launch with the Ollama profile
+### Start the sandbox
 
 ```bash
-openclaw nemoclaw launch --profile ollama
+nemoclaw start
 ```
 
-This creates the sandbox, configures the Ollama provider, and applies the Ollama egress network policy. The sandbox can then reach your Ollama endpoint on port 11434.
+This starts the sandbox using the provider and profile configured during onboarding. The sandbox is configured with the Ollama egress network policy and can reach your Ollama endpoint on port 11434.
 
 ### End-to-end verification
 
@@ -192,11 +192,11 @@ This creates the sandbox, configures the Ollama provider, and applies the Ollama
 # 1. Onboard
 nemoclaw onboard --endpoint ollama --model llama3.1:8b
 
-# 2. Launch
-openclaw nemoclaw launch --profile ollama
+# 2. Start the sandbox
+nemoclaw start
 
-# 3. Connect to the sandbox
-nemoclaw connect
+# 3. Connect to the sandbox (replace my-assistant with your sandbox name)
+nemoclaw my-assistant connect
 
 # 4. From inside the sandbox, send an inference request
 openclaw agent --local -m "say hello"

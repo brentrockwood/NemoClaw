@@ -582,10 +582,18 @@ async function setupInference(sandboxName, model, provider, opts) {
       `--config "OLLAMA_BASE_URL=${ollamaUrl}" 2>&1 || true`,
       { ignoreError: true }
     );
-    run(
-      `openshell inference set --no-verify --provider ollama-local --model ${model} 2>/dev/null || true`,
+    const inferenceOut = runCapture(
+      `openshell inference set --no-verify --provider ollama-local --model "${model}" 2>&1`,
       { ignoreError: true }
     );
+    registry.updateSandbox(sandboxName, { model, provider });
+    if (inferenceOut && /error/i.test(inferenceOut)) {
+      console.warn(`  ⚠ Inference route not configured: ${inferenceOut.trim().split("\n")[0]}`);
+      console.warn(`    Run 'make deploy' in your OpenShell repo to rebuild the gateway, then re-run onboard.`);
+    } else {
+      console.log(`  ✓ Inference route set: ${provider} / ${model}`);
+    }
+    return;
   }
 
   registry.updateSandbox(sandboxName, { model, provider });

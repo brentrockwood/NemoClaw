@@ -30,15 +30,43 @@ const GLOBAL_COMMANDS = new Set([
 
 async function onboard(args) {
   const { onboard: runOnboard } = require("./lib/onboard");
-  const allowedArgs = new Set(["--non-interactive"]);
-  const unknownArgs = args.filter((arg) => !allowedArgs.has(arg));
+  const flagsWithValues = new Set(["--endpoint", "--model", "--ollama-url", "--api-key"]);
+  const allowedFlags = new Set(["--non-interactive", ...flagsWithValues]);
+
+  // Parse known flags; collect anything unrecognised
+  const opts = {};
+  const unknownArgs = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (flagsWithValues.has(arg)) {
+      const val = args[i + 1];
+      if (!val || val.startsWith("--")) {
+        console.error(`  Option ${arg} requires a value.`);
+        process.exit(1);
+      }
+      const key = arg.replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      opts[key] = val;
+      i++;
+    } else if (allowedFlags.has(arg)) {
+      opts[arg.replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = true;
+    } else {
+      unknownArgs.push(arg);
+    }
+  }
+
   if (unknownArgs.length > 0) {
     console.error(`  Unknown onboard option(s): ${unknownArgs.join(", ")}`);
-    console.error("  Usage: nemoclaw onboard [--non-interactive]");
+    console.error("  Usage: nemoclaw onboard [--non-interactive] [--endpoint <type>] [--model <model>] [--ollama-url <url>] [--api-key <key>]");
     process.exit(1);
   }
-  const nonInteractive = args.includes("--non-interactive");
-  await runOnboard({ nonInteractive });
+
+  await runOnboard({
+    nonInteractive: opts.nonInteractive === true,
+    endpoint: opts.endpoint,
+    model: opts.model,
+    endpointUrl: opts.ollamaUrl,
+    apiKey: opts.apiKey,
+  });
 }
 
 async function setup() {

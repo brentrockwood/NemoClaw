@@ -2273,7 +2273,7 @@ async function createSandbox(
 // ── Step 3: Inference selection ──────────────────────────────────
 
 // eslint-disable-next-line complexity
-async function setupNim(gpu) {
+async function setupNim(gpu, opts) {
   step(3, 8, "Configuring inference (NIM)");
 
   let model = null;
@@ -2291,10 +2291,20 @@ async function setupNim(gpu) {
   const vllmRunning = !!runCapture("curl -sf http://localhost:8000/v1/models 2>/dev/null", {
     ignoreError: true,
   });
-  const requestedProvider = isNonInteractive() ? getNonInteractiveProvider() : null;
-  const requestedModel = isNonInteractive()
-    ? getNonInteractiveModel(requestedProvider || "build")
-    : null;
+  // --endpoint flag takes priority over NEMOCLAW_PROVIDER env var
+  const requestedProvider =
+    (opts && opts.endpoint) || (isNonInteractive() ? getNonInteractiveProvider() : null);
+  // --model flag takes priority over NEMOCLAW_MODEL env var
+  const requestedModel =
+    (opts && opts.model) ||
+    (isNonInteractive() ? getNonInteractiveModel(requestedProvider || "build") : null);
+
+  // Non-interactive or flag-driven: honor --endpoint / NEMOCLAW_PROVIDER
+  if (requestedProvider === "ollama") {
+    provider = "ollama-local";
+    model = requestedModel || "llama3.1:8b";
+    return { model, provider, endpointUrl, credentialEnv, preferredInferenceApi, nimContainer };
+  }
   const options = [];
   options.push({ key: "build", label: "NVIDIA Endpoints" });
   options.push({ key: "openai", label: "OpenAI" });
@@ -2302,14 +2312,7 @@ async function setupNim(gpu) {
   options.push({ key: "anthropic", label: "Anthropic" });
   options.push({ key: "anthropicCompatible", label: "Other Anthropic-compatible endpoint" });
   options.push({ key: "gemini", label: "Google Gemini" });
-  if (hasOllama || ollamaRunning) {
-    options.push({
-      key: "ollama",
-      label:
-        `Local Ollama (localhost:11434)${ollamaRunning ? " — running" : ""}` +
-        (ollamaRunning ? " (suggested)" : ""),
-    });
-  }
+  options.push({ key: "ollama", label: `Ollama — local or remote${ollamaRunning ? " (localhost detected)" : ""}` });
   if (EXPERIMENTAL && gpu && gpu.nimCapable) {
     options.push({ key: "nim-local", label: "Local NVIDIA NIM [experimental]" });
   }
@@ -2684,16 +2687,11 @@ async function setupNim(gpu) {
         }
         break;
       } else if (selected.key === "ollama") {
-        if (!ollamaRunning) {
-          console.log("  Starting Ollama...");
-          // On WSL2, binding to 0.0.0.0 creates a dual-stack socket that Docker
-          // cannot reach via host-gateway. The default 127.0.0.1 binding works
-          // because WSL2 relays IPv4-only sockets to the Windows host.
-          const ollamaEnv = isWsl() ? "" : "OLLAMA_HOST=0.0.0.0:11434 ";
-          run(`${ollamaEnv}ollama serve > /dev/null 2>&1 &`, { ignoreError: true });
-          sleep(2);
-        }
-        console.log("  ✓ Using Ollama on localhost:11434");
+        const defaultUrl = "http://localhost:11434";
+        const urlInput = await prompt(`  Ollama endpoint URL [${defaultUrl}]: `);
+        const rawUrl = (urlInput || defaultUrl).trim();
+        opts.endpointUrl = rawUrl.replace(/\/v1\/?$/, "");
+        console.log(`  ✓ Using Ollama at ${opts.endpointUrl}`);
         provider = "ollama-local";
         credentialEnv = "OPENAI_API_KEY";
         endpointUrl = getLocalProviderBaseUrl(provider);
@@ -2864,6 +2862,12 @@ async function setupNim(gpu) {
 
 // ── Step 4: Inference provider ───────────────────────────────────
 
+function resolveOllamaBaseUrl(opts) {
+  const raw = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || `${HOST_GATEWAY_URL}:11434`;
+  // Ensure exactly one /v1 suffix
+  return raw.replace(/\/v1\/?$/, "") + "/v1";
+}
+
 // eslint-disable-next-line complexity
 async function setupInference(
   sandboxName,
@@ -2871,6 +2875,7 @@ async function setupInference(
   provider,
   endpointUrl = null,
   credentialEnv = null,
+  opts = null,
 ) {
   step(4, 8, "Setting up inference provider");
   runOpenshell(["gateway", "select", GATEWAY_NAME], { ignoreError: true });
@@ -2968,14 +2973,8 @@ async function setupInference(
     }
     runOpenshell(["inference", "set", "--no-verify", "--provider", "vllm-local", "--model", model]);
   } else if (provider === "ollama-local") {
-    const validation = validateLocalProvider(provider, runCapture);
-    if (!validation.ok) {
-      console.error(`  ${validation.message}`);
-      console.error("  On macOS, local inference also depends on OpenShell host routing support.");
-      process.exit(1);
-    }
-    const baseUrl = getLocalProviderBaseUrl(provider);
-    const providerResult = upsertProvider("ollama-local", "openai", "OPENAI_API_KEY", baseUrl, {
+    const ollamaUrl = resolveOllamaBaseUrl(opts);
+    const providerResult = upsertProvider("ollama-local", "ollama", "OPENAI_API_KEY", ollamaUrl, {
       OPENAI_API_KEY: "ollama",
     });
     if (!providerResult.ok) {
@@ -3217,10 +3216,14 @@ async function setupOpenclaw(sandboxName, model, provider) {
 // ── Step 7: Policy presets ───────────────────────────────────────
 
 // eslint-disable-next-line complexity
-async function _setupPolicies(sandboxName) {
+async function setupPolicies(sandboxName, provider) {
   step(8, 8, "Policy presets");
 
   const suggestions = ["pypi", "npm"];
+  if (provider === "ollama-local") {
+    suggestions.push("ollama");
+    console.log("  Auto-detected: Ollama provider → suggesting ollama preset");
+  }
 
   // Auto-detect based on env tokens
   if (getCredential("TELEGRAM_BOT_TOKEN")) {
@@ -3495,10 +3498,15 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
   const selectedPresets = Array.isArray(options.selectedPresets) ? options.selectedPresets : null;
   const onSelection = typeof options.onSelection === "function" ? options.onSelection : null;
   const webSearchConfig = options.webSearchConfig || null;
+  const provider = options.provider ?? null;
 
   step(8, 8, "Policy presets");
 
   const suggestions = ["pypi", "npm"];
+  if (provider === "ollama-local") {
+    suggestions.push("ollama");
+    console.log("  Auto-detected: Ollama provider → suggesting ollama preset");
+  }
   if (getCredential("TELEGRAM_BOT_TOKEN")) suggestions.push("telegram");
   if (getCredential("SLACK_BOT_TOKEN") || process.env.SLACK_BOT_TOKEN) suggestions.push("slack");
   if (getCredential("DISCORD_BOT_TOKEN") || process.env.DISCORD_BOT_TOKEN)
@@ -3965,7 +3973,7 @@ async function onboard(opts = {}) {
         hydrateCredentialEnv(credentialEnv);
       } else {
         startRecordedStep("provider_selection", { sandboxName });
-        const selection = await setupNim(gpu);
+        const selection = await setupNim(gpu, opts);
         model = selection.model;
         provider = selection.provider;
         endpointUrl = selection.endpointUrl;
@@ -4011,6 +4019,7 @@ async function onboard(opts = {}) {
         provider,
         endpointUrl,
         credentialEnv,
+        opts,
       );
       delete process.env.NVIDIA_API_KEY;
       if (inferenceResult?.retry === "selection") {
@@ -4048,6 +4057,8 @@ async function onboard(opts = {}) {
         return current;
       });
     }
+
+
 
     const sandboxReuseState = getSandboxReuseState(sandboxName);
     const resumeSandbox =
@@ -4115,6 +4126,7 @@ async function onboard(opts = {}) {
         policyPresets: recordedPolicyPresets || [],
       });
       const appliedPolicyPresets = await setupPoliciesWithSelection(sandboxName, {
+        provider,
         selectedPresets:
           resume &&
           session?.steps?.policies?.status !== "complete" &&

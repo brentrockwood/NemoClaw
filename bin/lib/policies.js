@@ -297,6 +297,100 @@ function applyPreset(sandboxName, presetName, vars) {
   return true;
 }
 
+/**
+ * Apply multiple presets atomically: one GET, all merges in memory, one SET.
+ * Avoids the race where a subsequent GET misses a just-applied preset.
+ *
+ * @param {string} sandboxName
+ * @param {Array<{name: string, vars?: object}>} presets
+ */
+function applyPresets(sandboxName, presets) {
+  // Load and validate all preset entries first
+  const entries = [];
+  for (const { name, vars } of presets) {
+    let content = loadPreset(name);
+    if (!content) {
+      console.error(`  Cannot load preset: ${name}`);
+      return false;
+    }
+    if (vars && vars.host) {
+      content = content.replace(/(\bhost:\s*)localhost\b/g, `$1${vars.host}`);
+    }
+    const extracted = extractPresetEntries(content);
+    if (!extracted) {
+      console.error(`  Preset ${name} has no network_policies section.`);
+      return false;
+    }
+    entries.push({ name, extracted });
+  }
+
+  // GET once
+  let rawPolicy = "";
+  try {
+    rawPolicy = runCapture(buildPolicyGetCommand(sandboxName), { ignoreError: true });
+  } catch {}
+  let currentPolicy = parseCurrentPolicy(rawPolicy);
+
+  // Merge all entries in sequence into the same base policy
+  let merged = currentPolicy;
+  for (const { extracted: presetEntries } of entries) {
+    if (merged && merged.includes("network_policies:")) {
+      const lines = merged.split("\n");
+      const result = [];
+      let inNetworkPolicies = false;
+      let inserted = false;
+
+      for (const line of lines) {
+        const isTopLevel = /^\S.*:/.test(line);
+        if (line.trim() === "network_policies:" || line.trim().startsWith("network_policies:")) {
+          inNetworkPolicies = true;
+          result.push(line);
+          continue;
+        }
+        if (inNetworkPolicies && isTopLevel && !inserted) {
+          result.push(presetEntries);
+          inserted = true;
+          inNetworkPolicies = false;
+        }
+        result.push(line);
+      }
+      if (inNetworkPolicies && !inserted) {
+        result.push(presetEntries);
+      }
+      merged = result.join("\n");
+    } else if (merged) {
+      if (!merged.includes("version:")) {
+        merged = "version: 1\n" + merged;
+      }
+      merged = merged + "\n\nnetwork_policies:\n" + presetEntries;
+    } else {
+      merged = "version: 1\n\nnetwork_policies:\n" + presetEntries;
+    }
+  }
+
+  // SET once
+  const tmpFile = path.join(os.tmpdir(), `nemoclaw-policy-${Date.now()}.yaml`);
+  fs.writeFileSync(tmpFile, merged, "utf-8");
+  try {
+    run(buildPolicySetCommand(tmpFile, sandboxName));
+    console.log(`  Applied presets: ${presets.map((p) => p.name).join(", ")}`);
+  } finally {
+    fs.unlinkSync(tmpFile);
+  }
+
+  // Update registry
+  const sandbox = registry.getSandbox(sandboxName);
+  if (sandbox) {
+    const existing = sandbox.policies || [];
+    for (const { name } of presets) {
+      if (!existing.includes(name)) existing.push(name);
+    }
+    registry.updateSandbox(sandboxName, { policies: existing });
+  }
+
+  return true;
+}
+
 function getAppliedPresets(sandboxName) {
   const sandbox = registry.getSandbox(sandboxName);
   return sandbox ? sandbox.policies || [] : [];
@@ -360,6 +454,7 @@ module.exports = {
   buildPolicyGetCommand,
   mergePresetIntoPolicy,
   applyPreset,
+  applyPresets,
   getAppliedPresets,
   selectFromList,
 };

@@ -3292,27 +3292,12 @@ async function setupPolicies(sandboxName, provider, opts) {
       console.error(`  Sandbox '${sandboxName}' was not ready for policy application.`);
       process.exit(1);
     }
-    note(`  [non-interactive] Applying policy presets: ${selectedPresets.join(", ")}`);
-    for (const name of selectedPresets) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
-          policies.applyPreset(sandboxName, name, vars);
-          break;
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (message.includes("Unimplemented")) {
-            console.error("  OpenShell policy updates are not supported by this gateway build.");
-            console.error("  This is a known issue tracked in NemoClaw #536.");
-            throw err;
-          }
-          if (!message.includes("sandbox not found") || attempt === 2) {
-            throw err;
-          }
-          sleep(2);
-        }
-      }
-    }
+    console.log(`  [non-interactive] Applying policy presets: ${selectedPresets.join(", ")}`);
+    const presetArgs = selectedPresets.map((name) => ({
+      name,
+      vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+    }));
+    policies.applyPresets(sandboxName, presetArgs);
   } else {
     console.log("");
     console.log("  Available policy presets:");
@@ -3337,42 +3322,19 @@ async function setupPolicies(sandboxName, provider, opts) {
       process.exit(1);
     }
 
+    let chosen = suggestions;
     if (answer.toLowerCase() === "list") {
-      // Let user pick
       const picks = await prompt("  Enter preset names (comma-separated): ");
-      const selected = picks
+      chosen = picks
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
-      for (const name of selected) {
-        try {
-          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
-          policies.applyPreset(sandboxName, name, vars);
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (message.includes("Unimplemented")) {
-            console.error("  OpenShell policy updates are not supported by this gateway build.");
-            console.error("  This is a known issue tracked in NemoClaw #536.");
-          }
-          throw err;
-        }
-      }
-    } else {
-      // Apply suggested
-      for (const name of suggestions) {
-        try {
-          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
-          policies.applyPreset(sandboxName, name, vars);
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (message.includes("Unimplemented")) {
-            console.error("  OpenShell policy updates are not supported by this gateway build.");
-            console.error("  This is a known issue tracked in NemoClaw #536.");
-          }
-          throw err;
-        }
-      }
     }
+    const presetArgs = chosen.map((name) => ({
+      name,
+      vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+    }));
+    policies.applyPresets(sandboxName, presetArgs);
   }
 
   console.log("  ✓ Policies applied");

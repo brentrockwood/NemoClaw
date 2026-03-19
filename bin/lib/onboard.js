@@ -575,11 +575,11 @@ async function setupInference(sandboxName, model, provider, opts) {
   } else if (provider === "ollama-local") {
     const ollamaUrl = resolveOllamaBaseUrl(opts);
     run(
-      `openshell provider create --name ollama-local --type openai ` +
+      `openshell provider create --name ollama-local --type ollama ` +
       `--credential "OPENAI_API_KEY=ollama" ` +
-      `--config "OPENAI_BASE_URL=${ollamaUrl}" 2>&1 || ` +
+      `--config "OLLAMA_BASE_URL=${ollamaUrl}" 2>&1 || ` +
       `openshell provider update ollama-local --credential "OPENAI_API_KEY=ollama" ` +
-      `--config "OPENAI_BASE_URL=${ollamaUrl}" 2>&1 || true`,
+      `--config "OLLAMA_BASE_URL=${ollamaUrl}" 2>&1 || true`,
       { ignoreError: true }
     );
     run(

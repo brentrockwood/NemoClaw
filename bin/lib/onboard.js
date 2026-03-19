@@ -3215,14 +3215,27 @@ async function setupOpenclaw(sandboxName, model, provider) {
 
 // ── Step 7: Policy presets ───────────────────────────────────────
 
+function resolveOllamaHost(opts) {
+  const raw = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || "";
+  if (!raw) return "localhost";
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return "localhost";
+  }
+}
+
 // eslint-disable-next-line complexity
-async function setupPolicies(sandboxName, provider) {
+async function setupPolicies(sandboxName, provider, opts) {
   step(8, 8, "Policy presets");
+
+  const ollamaHost = provider === "ollama-local" ? resolveOllamaHost(opts) : null;
 
   const suggestions = ["pypi", "npm"];
   if (provider === "ollama-local") {
     suggestions.push("ollama");
-    console.log("  Auto-detected: Ollama provider → suggesting ollama preset");
+    const hostLabel = ollamaHost !== "localhost" ? ` (${ollamaHost})` : "";
+    console.log(`  Auto-detected: Ollama provider → suggesting ollama preset${hostLabel}`);
   }
 
   // Auto-detect based on env tokens
@@ -3283,7 +3296,8 @@ async function setupPolicies(sandboxName, provider) {
     for (const name of selectedPresets) {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          policies.applyPreset(sandboxName, name);
+          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+          policies.applyPreset(sandboxName, name, vars);
           break;
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
@@ -3332,7 +3346,8 @@ async function setupPolicies(sandboxName, provider) {
         .filter(Boolean);
       for (const name of selected) {
         try {
-          policies.applyPreset(sandboxName, name);
+          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+          policies.applyPreset(sandboxName, name, vars);
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
           if (message.includes("Unimplemented")) {
@@ -3346,7 +3361,8 @@ async function setupPolicies(sandboxName, provider) {
       // Apply suggested
       for (const name of suggestions) {
         try {
-          policies.applyPreset(sandboxName, name);
+          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+          policies.applyPreset(sandboxName, name, vars);
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
           if (message.includes("Unimplemented")) {
@@ -3499,13 +3515,15 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
   const onSelection = typeof options.onSelection === "function" ? options.onSelection : null;
   const webSearchConfig = options.webSearchConfig || null;
   const provider = options.provider ?? null;
+  const ollamaHost = provider === "ollama-local" ? resolveOllamaHost(options.opts ?? null) : null;
 
   step(8, 8, "Policy presets");
 
   const suggestions = ["pypi", "npm"];
   if (provider === "ollama-local") {
     suggestions.push("ollama");
-    console.log("  Auto-detected: Ollama provider → suggesting ollama preset");
+    const hostLabel = ollamaHost && ollamaHost !== "localhost" ? ` (${ollamaHost})` : "";
+    console.log(`  Auto-detected: Ollama provider → suggesting ollama preset${hostLabel}`);
   }
   if (getCredential("TELEGRAM_BOT_TOKEN")) suggestions.push("telegram");
   if (getCredential("SLACK_BOT_TOKEN") || process.env.SLACK_BOT_TOKEN) suggestions.push("slack");
@@ -3526,7 +3544,8 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
     note(`  [resume] Reapplying policy presets: ${chosen.join(", ")}`);
     for (const name of chosen) {
       if (applied.includes(name)) continue;
-      policies.applyPreset(sandboxName, name);
+      const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+      policies.applyPreset(sandboxName, name, vars);
     }
     return chosen;
   }
@@ -3571,7 +3590,8 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
     for (const name of chosen) {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          policies.applyPreset(sandboxName, name);
+          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+          policies.applyPreset(sandboxName, name, vars);
           break;
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
@@ -3607,9 +3627,10 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
 
   const newlySelected = interactiveChoice.filter((name) => !applied.includes(name));
   for (const name of newlySelected) {
+    const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        policies.applyPreset(sandboxName, name);
+        policies.applyPreset(sandboxName, name, vars);
         break;
       } catch (err) {
         const message = err && err.message ? err.message : String(err);
@@ -4127,6 +4148,7 @@ async function onboard(opts = {}) {
       });
       const appliedPolicyPresets = await setupPoliciesWithSelection(sandboxName, {
         provider,
+        opts,
         selectedPresets:
           resume &&
           session?.steps?.policies?.status !== "complete" &&

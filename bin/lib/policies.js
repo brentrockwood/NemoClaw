@@ -217,7 +217,7 @@ function mergePresetIntoPolicy(currentPolicy, presetEntries) {
 
   return YAML.stringify(output);
 }
-function applyPreset(sandboxName, presetName) {
+function applyPreset(sandboxName, presetName, vars) {
   // Guard against truncated sandbox names — WSL can truncate hyphenated
   // names during argument parsing, e.g. "my-assistant" → "m"
   const isRfc1123Label = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(sandboxName);
@@ -228,10 +228,18 @@ function applyPreset(sandboxName, presetName) {
     );
   }
 
-  const presetContent = loadPreset(presetName);
+  let presetContent = loadPreset(presetName);
   if (!presetContent) {
     console.error(`  Cannot load preset: ${presetName}`);
     return false;
+  }
+
+  // Substitute variables (e.g. { host: "ai1.lab" } replaces `host: localhost`)
+  if (vars && vars.host) {
+    presetContent = presetContent.replace(
+      /(\bhost:\s*)localhost\b/g,
+      `$1${vars.host}`
+    );
   }
 
   const presetEntries = extractPresetEntries(presetContent);

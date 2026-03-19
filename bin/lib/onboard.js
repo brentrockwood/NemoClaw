@@ -2997,6 +2997,7 @@ async function setupInference(
       console.error(`  ${probe.message}`);
       process.exit(1);
     }
+    return;
   }
 
   verifyInferenceRoute(provider, model);

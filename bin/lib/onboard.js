@@ -472,9 +472,9 @@ async function setupNim(sandboxName, gpu, opts) {
   const ollamaRunning = !!runCapture("curl -sf http://localhost:11434/api/tags 2>/dev/null", { ignoreError: true });
   const vllmRunning = !!runCapture("curl -sf http://localhost:8000/v1/models 2>/dev/null", { ignoreError: true });
   // --endpoint flag takes priority over NEMOCLAW_PROVIDER env var
-  const requestedProvider = opts.endpoint || (isNonInteractive() ? getNonInteractiveProvider() : null);
+  const requestedProvider = (opts && opts.endpoint) || (isNonInteractive() ? getNonInteractiveProvider() : null);
   // --model flag takes priority over NEMOCLAW_MODEL env var
-  const requestedModel = opts.model || (isNonInteractive() ? getNonInteractiveModel(requestedProvider || "cloud") : null);
+  const requestedModel = (opts && opts.model) || (isNonInteractive() ? getNonInteractiveModel(requestedProvider || "cloud") : null);
 
   // Auto-select only with NEMOCLAW_EXPERIMENTAL=1 (prevents silent misconfiguration)
   if (EXPERIMENTAL) {

@@ -607,13 +607,26 @@ async function setupOpenclaw(sandboxName) {
 
 // ── Step 7: Policy presets ───────────────────────────────────────
 
-async function setupPolicies(sandboxName, provider) {
+function resolveOllamaHost(opts) {
+  const raw = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || "";
+  if (!raw) return "localhost";
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return "localhost";
+  }
+}
+
+async function setupPolicies(sandboxName, provider, opts) {
   step(7, 7, "Policy presets");
+
+  const ollamaHost = provider === "ollama-local" ? resolveOllamaHost(opts) : null;
 
   const suggestions = ["pypi", "npm"];
   if (provider === "ollama-local") {
     suggestions.push("ollama");
-    console.log("  Auto-detected: Ollama provider → suggesting ollama preset");
+    const hostLabel = ollamaHost !== "localhost" ? ` (${ollamaHost})` : "";
+    console.log(`  Auto-detected: Ollama provider → suggesting ollama preset${hostLabel}`);
   }
 
   // Auto-detect based on env tokens
@@ -683,7 +696,8 @@ async function setupPolicies(sandboxName, provider) {
     for (const name of selectedPresets) {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          policies.applyPreset(sandboxName, name);
+          const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+          policies.applyPreset(sandboxName, name, vars);
           break;
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
@@ -707,12 +721,14 @@ async function setupPolicies(sandboxName, provider) {
       const picks = await prompt("  Enter preset names (comma-separated): ");
       const selected = picks.split(",").map((s) => s.trim()).filter(Boolean);
       for (const name of selected) {
-        policies.applyPreset(sandboxName, name);
+        const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+        policies.applyPreset(sandboxName, name, vars);
       }
     } else {
       // Apply suggested
       for (const name of suggestions) {
-        policies.applyPreset(sandboxName, name);
+        const vars = name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined;
+        policies.applyPreset(sandboxName, name, vars);
       }
     }
   }
@@ -760,7 +776,7 @@ async function onboard(opts = {}) {
   const { model, provider } = await setupNim(sandboxName, gpu, opts);
   await setupInference(sandboxName, model, provider, opts);
   await setupOpenclaw(sandboxName);
-  await setupPolicies(sandboxName, provider);
+  await setupPolicies(sandboxName, provider, opts);
   printDashboard(sandboxName, model, provider);
 }
 

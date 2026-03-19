@@ -83,11 +83,19 @@ function buildPolicyGetCommand(sandboxName) {
   return `openshell policy get --full "${sandboxName}" 2>/dev/null`;
 }
 
-function applyPreset(sandboxName, presetName) {
-  const presetContent = loadPreset(presetName);
+function applyPreset(sandboxName, presetName, vars) {
+  let presetContent = loadPreset(presetName);
   if (!presetContent) {
     console.error(`  Cannot load preset: ${presetName}`);
     return false;
+  }
+
+  // Substitute variables (e.g. { host: "ai1.lab" } replaces `host: localhost`)
+  if (vars && vars.host) {
+    presetContent = presetContent.replace(
+      /(\bhost:\s*)localhost\b/g,
+      `$1${vars.host}`
+    );
   }
 
   const presetEntries = extractPresetEntries(presetContent);

@@ -756,36 +756,61 @@ function exitWithSpawnResult(result) {
 async function onboard(args) {
   const { onboard: runOnboard } = require("./lib/onboard");
 
-  // Extract --from <path> before the unknown-arg validator: it takes a value
-  // so the set-based check would reject the value token as an unknown flag.
-  let fromDockerfile = null;
-  const fromIdx = args.indexOf("--from");
-  if (fromIdx !== -1) {
-    fromDockerfile = args[fromIdx + 1];
-    if (!fromDockerfile || fromDockerfile.startsWith("--")) {
-      console.error("  --from requires a path to a Dockerfile");
-      console.error(
-        `  Usage: nemoclaw onboard [--non-interactive] [--resume] [--from <Dockerfile>] [${NOTICE_ACCEPT_FLAG}]`,
-      );
-      process.exit(1);
+  const flagsWithValues = new Set(["--endpoint", "--model", "--ollama-url", "--api-key", "--from"]);
+  const allowedFlags = new Set([
+    "--non-interactive",
+    "--resume",
+    NOTICE_ACCEPT_FLAG,
+    ...flagsWithValues,
+  ]);
+
+  // Parse known flags; collect anything unrecognised
+  const opts = {};
+  const unknownArgs = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (flagsWithValues.has(arg)) {
+      const val = args[i + 1];
+      if (!val || val.startsWith("--")) {
+        console.error(`  Option ${arg} requires a value.`);
+        console.error(
+          `  Usage: nemoclaw onboard [--non-interactive] [--resume] [--from <Dockerfile>] [--endpoint <type>] [--model <model>] [--ollama-url <url>] [--api-key <key>] [${NOTICE_ACCEPT_FLAG}]`,
+        );
+        process.exit(1);
+      }
+      const key = arg.replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      opts[key] = val;
+      i++;
+    } else if (allowedFlags.has(arg)) {
+      const key = arg.replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      opts[key] = true;
+    } else {
+      unknownArgs.push(arg);
     }
-    args = [...args.slice(0, fromIdx), ...args.slice(fromIdx + 2)];
   }
 
-  const allowedArgs = new Set(["--non-interactive", "--resume", NOTICE_ACCEPT_FLAG]);
-  const unknownArgs = args.filter((arg) => !allowedArgs.has(arg));
   if (unknownArgs.length > 0) {
     console.error(`  Unknown onboard option(s): ${unknownArgs.join(", ")}`);
     console.error(
-      `  Usage: nemoclaw onboard [--non-interactive] [--resume] [--from <Dockerfile>] [${NOTICE_ACCEPT_FLAG}]`,
+      `  Usage: nemoclaw onboard [--non-interactive] [--resume] [--from <Dockerfile>] [--endpoint <type>] [--model <model>] [--ollama-url <url>] [--api-key <key>] [${NOTICE_ACCEPT_FLAG}]`,
     );
     process.exit(1);
   }
-  const nonInteractive = args.includes("--non-interactive");
-  const resume = args.includes("--resume");
+
   const acceptThirdPartySoftware =
-    args.includes(NOTICE_ACCEPT_FLAG) || String(process.env[NOTICE_ACCEPT_ENV] || "") === "1";
-  await runOnboard({ nonInteractive, resume, fromDockerfile, acceptThirdPartySoftware });
+    opts[NOTICE_ACCEPT_FLAG.replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase())] ===
+      true || String(process.env[NOTICE_ACCEPT_ENV] || "") === "1";
+
+  await runOnboard({
+    nonInteractive: opts.nonInteractive === true,
+    resume: opts.resume === true,
+    fromDockerfile: opts.from ?? null,
+    acceptThirdPartySoftware,
+    endpoint: opts.endpoint,
+    model: opts.model,
+    endpointUrl: opts.ollamaUrl,
+    apiKey: opts.apiKey,
+  });
 }
 
 async function setup(args = []) {

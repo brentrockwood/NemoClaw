@@ -874,7 +874,7 @@ exit 0
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7", "1", "2", "llama3.2:3b"];
+const answers = ["7", "", "1", "2", "llama3.2:3b"];
 const messages = [];
 
 credentials.prompt = async (message) => {

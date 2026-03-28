@@ -29,6 +29,7 @@ const {
   getOllamaWarmupCommand,
   validateOllamaModel,
   validateLocalProvider,
+  HOST_GATEWAY_URL,
 } = require("./local-inference");
 const {
   DEFAULT_CLOUD_MODEL,

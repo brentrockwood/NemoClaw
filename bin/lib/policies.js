@@ -304,6 +304,7 @@ function applyPreset(sandboxName, presetName, vars) {
  * @param {string} sandboxName
  * @param {Array<{name: string, vars?: object}>} presets
  */
+// eslint-disable-next-line complexity
 function applyPresets(sandboxName, presets) {
   // Load and validate all preset entries first
   const entries = [];
@@ -328,7 +329,7 @@ function applyPresets(sandboxName, presets) {
   let rawPolicy = "";
   try {
     rawPolicy = runCapture(buildPolicyGetCommand(sandboxName), { ignoreError: true });
-  } catch {}
+  } catch { /* ignored */ }
   let currentPolicy = parseCurrentPolicy(rawPolicy);
 
   // Merge all entries in sequence into the same base policy

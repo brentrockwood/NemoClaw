@@ -236,10 +236,7 @@ function applyPreset(sandboxName, presetName, vars) {
 
   // Substitute variables (e.g. { host: "ai1.lab" } replaces `host: localhost`)
   if (vars && vars.host) {
-    presetContent = presetContent.replace(
-      /(\bhost:\s*)localhost\b/g,
-      `$1${vars.host}`
-    );
+    presetContent = presetContent.replace(/(\bhost:\s*)localhost\b/g, `$1${vars.host}`);
   }
 
   const presetEntries = extractPresetEntries(presetContent);
@@ -329,7 +326,9 @@ function applyPresets(sandboxName, presets) {
   let rawPolicy = "";
   try {
     rawPolicy = runCapture(buildPolicyGetCommand(sandboxName), { ignoreError: true });
-  } catch { /* ignored */ }
+  } catch {
+    /* ignored */
+  }
   let currentPolicy = parseCurrentPolicy(rawPolicy);
 
   // Merge all entries in sequence into the same base policy

@@ -36,7 +36,7 @@ const {
   getProviderSelectionConfig,
   parseGatewayInference,
 } = require("./inference-config");
-const { inferContainerRuntime, isWsl, shouldPatchCoredns } = require("./platform");
+const { inferContainerRuntime, shouldPatchCoredns } = require("./platform");
 const { resolveOpenshell } = require("./resolve-openshell");
 const {
   prompt,
@@ -2329,7 +2329,10 @@ async function setupNim(gpu, opts) {
   options.push({ key: "anthropic", label: "Anthropic" });
   options.push({ key: "anthropicCompatible", label: "Other Anthropic-compatible endpoint" });
   options.push({ key: "gemini", label: "Google Gemini" });
-  options.push({ key: "ollama", label: `Ollama — local or remote${ollamaRunning ? " (localhost detected)" : ""}` });
+  options.push({
+    key: "ollama",
+    label: `Ollama — local or remote${ollamaRunning ? " (localhost detected)" : ""}`,
+  });
   if (EXPERIMENTAL && gpu && gpu.nimCapable) {
     options.push({ key: "nim-local", label: "Local NVIDIA NIM [experimental]" });
   }
@@ -2880,7 +2883,8 @@ async function setupNim(gpu, opts) {
 // ── Step 4: Inference provider ───────────────────────────────────
 
 function resolveOllamaBaseUrl(opts) {
-  const raw = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || `${HOST_GATEWAY_URL}:11434`;
+  const raw =
+    (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || `${HOST_GATEWAY_URL}:11434`;
   // Ensure exactly one /v1 suffix
   return raw.replace(/\/v1\/?$/, "") + "/v1";
 }
@@ -3244,7 +3248,7 @@ function resolveOllamaHost(opts) {
 }
 
 // eslint-disable-next-line complexity
-async function setupPolicies(sandboxName, provider, opts) {
+async function _setupPolicies(sandboxName, provider, opts) {
   step(8, 8, "Policy presets");
 
   const ollamaHost = provider === "ollama-local" ? resolveOllamaHost(opts) : null;
@@ -4058,8 +4062,6 @@ async function onboard(opts = {}) {
         return current;
       });
     }
-
-
 
     const sandboxReuseState = getSandboxReuseState(sandboxName);
     const resumeSandbox =

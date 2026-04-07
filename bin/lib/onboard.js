@@ -2300,22 +2300,6 @@ async function setupNim(gpu, opts) {
     (opts && opts.model) ||
     (isNonInteractive() ? getNonInteractiveModel(requestedProvider || "build") : null);
 
-  // Auto-select only with NEMOCLAW_EXPERIMENTAL=1 (prevents silent misconfiguration)
-  if (EXPERIMENTAL) {
-    if (vllmRunning) {
-      console.log("  ✓ vLLM detected on localhost:8000 — using it [experimental]");
-      provider = "vllm-local";
-      model = "vllm-local";
-      return { model, provider, endpointUrl, credentialEnv, preferredInferenceApi, nimContainer };
-    }
-    if (ollamaRunning) {
-      console.log("  ✓ Ollama detected on localhost:11434 — using it [experimental]");
-      provider = "ollama-local";
-      model = "nemotron-3-nano";
-      return { model, provider, endpointUrl, credentialEnv, preferredInferenceApi, nimContainer };
-    }
-  }
-
   // Non-interactive or flag-driven: honor --endpoint / NEMOCLAW_PROVIDER
   if (requestedProvider === "ollama") {
     provider = "ollama-local";
@@ -2710,8 +2694,9 @@ async function setupNim(gpu, opts) {
         const defaultUrl = "http://localhost:11434";
         const urlInput = await prompt(`  Ollama endpoint URL [${defaultUrl}]: `);
         const rawUrl = (urlInput || defaultUrl).trim();
-        opts.endpointUrl = rawUrl.replace(/\/v1\/?$/, "");
-        console.log(`  ✓ Using Ollama at ${opts.endpointUrl}`);
+        const resolvedUrl = rawUrl.replace(/\/v1\/?$/, "");
+        if (opts) opts.endpointUrl = resolvedUrl;
+        console.log(`  ✓ Using Ollama at ${resolvedUrl}`);
         provider = "ollama-local";
         credentialEnv = "OPENAI_API_KEY";
         endpointUrl = getLocalProviderBaseUrl(provider);

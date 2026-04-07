@@ -246,6 +246,53 @@ describe("policies", () => {
     });
   });
 
+  describe("applyPreset vars substitution", () => {
+    it("substitutes vars.host for localhost in the ollama preset before logging egress", () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+        throw new Error("exit");
+      });
+
+      try {
+        try {
+          policies.applyPreset("test-sandbox", "ollama", { host: "ai1.lab" });
+        } catch {
+          /* applyPreset may throw if sandbox not running */
+        }
+        const messages = logSpy.mock.calls.map((c) => c[0]);
+        expect(messages.some((m) => typeof m === "string" && m.includes("ai1.lab"))).toBe(true);
+        expect(messages.some((m) => typeof m === "string" && m.includes("localhost"))).toBe(false);
+      } finally {
+        logSpy.mockRestore();
+        errSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    });
+
+    it("does not substitute when no vars provided", () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+        throw new Error("exit");
+      });
+
+      try {
+        try {
+          policies.applyPreset("test-sandbox", "ollama");
+        } catch {
+          /* applyPreset may throw if sandbox not running */
+        }
+        const messages = logSpy.mock.calls.map((c) => c[0]);
+        expect(messages.some((m) => typeof m === "string" && m.includes("localhost"))).toBe(true);
+      } finally {
+        logSpy.mockRestore();
+        errSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    });
+  });
+
   describe("buildPolicySetCommand", () => {
     it("shell-quotes sandbox name to prevent injection", () => {
       const cmd = policies.buildPolicySetCommand("/tmp/policy.yaml", "my-assistant");

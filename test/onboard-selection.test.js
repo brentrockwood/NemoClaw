@@ -665,7 +665,7 @@ printf '%s' "$status"
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7", "2", "back", "1", ""];
+const answers = ["7", "", "2", "back", "1", ""];
 const messages = [];
 
 credentials.prompt = async (message) => {
@@ -2548,12 +2548,13 @@ printf '%s' "$status"
       { mode: 0o755 },
     );
 
-    // vLLM is option 7 (build, openai, custom, anthropic, anthropicCompatible, gemini, vllm)
+    // vLLM is option 8 (build, openai, custom, anthropic, anthropicCompatible, gemini, ollama, vllm)
+    // ollama is always shown (even without local ollama) to support remote Ollama endpoints
     const script = String.raw`
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7"];
+const answers = ["8"];
 const messages = [];
 
 credentials.prompt = async (message) => {
@@ -2647,8 +2648,9 @@ printf '%s' "$status"
       { mode: 0o755 },
     );
 
-    // NIM-local is option 7 (build, openai, custom, anthropic, anthropicCompatible, gemini, nim-local)
-    // No ollama, no vLLM — only NIM-local shows up as experimental option
+    // NIM-local is option 8 (build, openai, custom, anthropic, anthropicCompatible, gemini, ollama, nim-local)
+    // ollama is always shown (even without local ollama) to support remote Ollama endpoints
+    // No vLLM — only NIM-local shows up as experimental option after ollama
     const script = String.raw`
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
@@ -2661,8 +2663,8 @@ nimMod.containerName = () => "nemoclaw-nim-test";
 nimMod.startNimContainerByName = () => "container-123";
 nimMod.waitForNimHealth = () => true;
 
-// Select option 7 (nim-local), then model 1
-const answers = ["7", "1"];
+// Select option 8 (nim-local), then model 1
+const answers = ["8", "1"];
 const messages = [];
 
 credentials.prompt = async (message) => {

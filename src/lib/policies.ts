@@ -219,7 +219,7 @@ function mergePresetIntoPolicy(currentPolicy, presetEntries) {
 
   return YAML.stringify(output);
 }
-function applyPreset(sandboxName, presetName, _options = {}) {
+function applyPreset(sandboxName, presetName, vars?: { host?: string; access?: string }) {
   // Guard against truncated sandbox names — WSL can truncate hyphenated
   // names during argument parsing, e.g. "my-assistant" → "m"
   const isRfc1123Label = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(sandboxName);
@@ -230,10 +230,15 @@ function applyPreset(sandboxName, presetName, _options = {}) {
     );
   }
 
-  const presetContent = loadPreset(presetName);
+  let presetContent = loadPreset(presetName);
   if (!presetContent) {
     console.error(`  Cannot load preset: ${presetName}`);
     return false;
+  }
+
+  // Substitute variables (e.g. { host: "ai1.lab" } replaces `host: localhost`)
+  if (vars?.host) {
+    presetContent = presetContent.replace(/(\bhost:\s*)localhost\b/g, `$1${vars.host}`);
   }
 
   const presetEntries = extractPresetEntries(presetContent);
@@ -392,6 +397,87 @@ function applyPermissivePolicy(sandboxName) {
   }
 }
 
+/**
+ * Apply multiple presets atomically: one GET, all merges in memory, one SET.
+ * Avoids the race where a subsequent GET misses a just-applied preset.
+ */
+// eslint-disable-next-line complexity
+function applyPresets(sandboxName: string, presets: Array<{ name: string; vars?: { host?: string; access?: string } }>): boolean {
+  // Load and validate all preset contents first
+  const entries: Array<{ name: string; presetContent: string; presetEntries: string }> = [];
+  for (const { name, vars } of presets) {
+    let content = loadPreset(name);
+    if (!content) {
+      console.error(`  Cannot load preset: ${name}`);
+      return false;
+    }
+    if (vars?.host) {
+      content = content.replace(/(\bhost:\s*)localhost\b/g, `$1${vars.host}`);
+    }
+    const extracted = extractPresetEntries(content);
+    if (!extracted) {
+      console.error(`  Preset ${name} has no network_policies section.`);
+      return false;
+    }
+    entries.push({ name, presetContent: content, presetEntries: extracted });
+  }
+
+  // GET once
+  let rawPolicy = "";
+  try {
+    rawPolicy = runCapture(buildPolicyGetCommand(sandboxName), { ignoreError: true });
+  } catch {
+    /* ignored */
+  }
+  let currentPolicy = parseCurrentPolicy(rawPolicy);
+
+  // Merge all entries in sequence into the same base policy
+  for (const { presetEntries } of entries) {
+    currentPolicy = mergePresetIntoPolicy(currentPolicy, presetEntries);
+  }
+
+  // Log endpoints from all presets
+  for (const { presetContent, name } of entries) {
+    const endpoints = getPresetEndpoints(presetContent);
+    if (endpoints.length > 0) {
+      console.log(`  Widening sandbox egress (${name}) — adding: ${endpoints.join(", ")}`);
+    }
+  }
+
+  // SET once
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-policy-"));
+  const tmpFile = path.join(tmpDir, "policy.yaml");
+  fs.writeFileSync(tmpFile, currentPolicy, { encoding: "utf-8", mode: 0o600 });
+
+  try {
+    run(buildPolicySetCommand(tmpFile, sandboxName));
+    for (const { name } of entries) {
+      console.log(`  Applied preset: ${name}`);
+      const sandbox = registry.getSandbox(sandboxName);
+      if (sandbox) {
+        const pols = sandbox.policies || [];
+        if (!pols.includes(name)) {
+          pols.push(name);
+        }
+        registry.updateSandbox(sandboxName, { policies: pols });
+      }
+    }
+  } finally {
+    try {
+      fs.unlinkSync(tmpFile);
+    } catch {
+      /* ignored */
+    }
+    try {
+      fs.rmdirSync(tmpDir);
+    } catch {
+      /* ignored */
+    }
+  }
+
+  return true;
+}
+
 export {
   PRESETS_DIR,
   PERMISSIVE_POLICY_PATH,
@@ -404,6 +490,7 @@ export {
   buildPolicyGetCommand,
   mergePresetIntoPolicy,
   applyPreset,
+  applyPresets,
   applyPermissivePolicy,
   getAppliedPresets,
   selectFromList,

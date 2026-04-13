@@ -89,11 +89,9 @@ components:
             access: full
 
       # Ollama egress: host is resolved from OLLAMA_BASE_URL at plan time.
-      # Active only when the ollama profile is selected.
       ollama_service:
         name: ollama_service
         endpoints:
           - host: "${OLLAMA_HOST}"
             port: 11434
-            protocol: rest
-        profiles: [ollama]
+            access: full

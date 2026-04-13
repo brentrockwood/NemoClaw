@@ -9,6 +9,10 @@ export interface OnboardCommandOptions {
   acceptThirdPartySoftware: boolean;
   agent: string | null;
   dangerouslySkipPermissions: boolean;
+  endpoint: string | null;
+  model: string | null;
+  endpointUrl: string | null;
+  apiKey: string | null;
 }
 
 export interface RunOnboardCommandDeps {
@@ -36,7 +40,7 @@ const ONBOARD_BASE_ARGS = [
 
 function onboardUsageLines(noticeAcceptFlag: string): string[] {
   return [
-    `  Usage: nemoclaw onboard [--non-interactive] [--resume] [--recreate-sandbox] [--from <Dockerfile>] [--agent <name>] [--dangerously-skip-permissions] [${noticeAcceptFlag}]`,
+    `  Usage: nemoclaw onboard [--non-interactive] [--resume] [--recreate-sandbox] [--from <Dockerfile>] [--agent <name>] [--endpoint <type>] [--model <model>] [--ollama-url <url>] [--api-key <key>] [--dangerously-skip-permissions] [${noticeAcceptFlag}]`,
     "",
   ];
 }
@@ -88,6 +92,32 @@ export function parseOnboardArgs(
     parsedArgs.splice(agentIdx, 2);
   }
 
+  const ollamaValueFlags: Array<[string, string]> = [
+    ["--endpoint", "endpoint"],
+    ["--model", "model"],
+    ["--ollama-url", "ollamaUrl"],
+    ["--api-key", "apiKey"],
+  ];
+  const ollamaValues: Record<string, string | null> = {
+    endpoint: null,
+    model: null,
+    ollamaUrl: null,
+    apiKey: null,
+  };
+  for (const [flag, key] of ollamaValueFlags) {
+    const idx = parsedArgs.indexOf(flag);
+    if (idx !== -1) {
+      const val = parsedArgs[idx + 1];
+      if (!val || val.startsWith("--")) {
+        error(`  Option ${flag} requires a value.`);
+        printOnboardUsage(error, noticeAcceptFlag);
+        exit(1);
+      }
+      ollamaValues[key] = val;
+      parsedArgs.splice(idx, 2);
+    }
+  }
+
   const allowedArgs = new Set([...ONBOARD_BASE_ARGS, noticeAcceptFlag]);
   const unknownArgs = parsedArgs.filter((arg) => !allowedArgs.has(arg));
   if (unknownArgs.length > 0) {
@@ -105,6 +135,10 @@ export function parseOnboardArgs(
       parsedArgs.includes(noticeAcceptFlag) || String(deps.env[noticeAcceptEnv] || "") === "1",
     agent,
     dangerouslySkipPermissions: parsedArgs.includes("--dangerously-skip-permissions"),
+    endpoint: ollamaValues.endpoint,
+    model: ollamaValues.model,
+    endpointUrl: ollamaValues.ollamaUrl,
+    apiKey: ollamaValues.apiKey,
   };
 }
 

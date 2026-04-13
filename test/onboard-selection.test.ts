@@ -541,7 +541,7 @@ const { setupNim } = require(${onboardPath});
     assert.ok(payload.lines.some((line) => line.includes("Chat Completions API available")));
   });
 
-  it("warms and validates Ollama via localhost before moving on", () => {
+  it("selects Ollama via localhost with an installed model", () => {
     const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-ollama-validation-"));
     const fakeBin = path.join(tmpDir, "bin");
@@ -574,7 +574,8 @@ printf '%s' "$status"
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7", "1"];
+// "7" selects Ollama, "" accepts the default URL, "1" picks the installed model
+const answers = ["7", "", "1"];
 const messages = [];
 const commands = [];
 
@@ -591,7 +592,6 @@ runner.runCapture = (command) => {
   if (command.includes("localhost:11434/api/tags")) return JSON.stringify({ models: [{ name: "nemotron-3-nano:30b" }] });
   if (command.includes("ollama list")) return "nemotron-3-nano:30b  abc  24 GB  now";
   if (command.includes("localhost:8000/v1/models")) return "";
-  if (command.includes("api/generate")) return '{"response":"hello"}';
   return "";
 };
 
@@ -630,13 +630,8 @@ const { setupNim } = require(${onboardPath});
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout.trim());
     assert.equal(payload.result.provider, "ollama-local");
+    assert.equal(payload.result.model, "nemotron-3-nano:30b");
     assert.equal(payload.result.preferredInferenceApi, "openai-completions");
-    assert.ok(
-      payload.lines.some((line) => line.includes("Loading Ollama model: nemotron-3-nano:30b")),
-    );
-    assert.ok(
-      payload.commands.some((command) => command.includes("http://localhost:11434/api/generate")),
-    );
   });
 
   it("returns to provider selection when Ollama manual entry chooses back", () => {
@@ -671,7 +666,8 @@ printf '%s' "$status"
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7", "2", "back", "1", ""];
+// "7"=ollama, ""=accept default URL, "2"=Other..., "back"=go back, "1"=NVIDIA build, ""=model default
+const answers = ["7", "", "2", "back", "1", ""];
 const messages = [];
 
 credentials.prompt = async (message) => {
@@ -729,7 +725,7 @@ const { setupNim } = require(${onboardPath});
     assert.equal(payload.messages.filter((message) => /Ollama model id: /.test(message)).length, 1);
   });
 
-  it("offers starter Ollama models when none are installed and pulls the selected model", () => {
+  it("accepts a typed model name when no Ollama models are installed", () => {
     const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-ollama-bootstrap-"));
     const fakeBin = path.join(tmpDir, "bin");
@@ -773,7 +769,8 @@ exit 0
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7", "1"];
+// "7"=ollama, ""=accept default URL, "llama3.1:8b"=typed model name (no installed models)
+const answers = ["7", "", "llama3.1:8b"];
 const messages = [];
 
 credentials.prompt = async (message) => {
@@ -785,7 +782,6 @@ runner.runCapture = (command) => {
   if (command.includes("localhost:11434/api/tags")) return JSON.stringify({ models: [] });
   if (command.includes("ollama list")) return "";
   if (command.includes("localhost:8000/v1/models")) return "";
-  if (command.includes("api/generate")) return '{"response":"hello"}';
   return "";
 };
 
@@ -824,24 +820,19 @@ const { setupNim } = require(${onboardPath});
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout.trim());
     assert.equal(payload.result.provider, "ollama-local");
-    assert.equal(payload.result.model, "qwen2.5:7b");
-    assert.ok(payload.lines.some((line) => line.includes("Ollama starter models:")));
-    assert.ok(
-      payload.lines.some((line) => line.includes("No local Ollama models are installed yet")),
-    );
-    assert.ok(payload.lines.some((line) => line.includes("Pulling Ollama model: qwen2.5:7b")));
-    assert.equal(fs.readFileSync(pullLog, "utf8").trim(), "qwen2.5:7b");
+    assert.equal(payload.result.model, "llama3.1:8b");
+    assert.equal(payload.result.preferredInferenceApi, "openai-completions");
+    assert.ok(payload.lines.some((line) => line.includes("No local Ollama models found")));
   });
 
-  it("reprompts inside the Ollama model flow when a pull fails", () => {
+  it("accepts a remote Ollama URL and model when specified interactively", () => {
     const repoRoot = path.join(import.meta.dirname, "..");
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-ollama-retry-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-ollama-remote-"));
     const fakeBin = path.join(tmpDir, "bin");
-    const scriptPath = path.join(tmpDir, "ollama-retry-check.js");
+    const scriptPath = path.join(tmpDir, "ollama-remote-check.js");
     const onboardPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "onboard.js"));
     const credentialsPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "credentials.js"));
     const runnerPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "runner.js"));
-    const pullLog = path.join(tmpDir, "pulls.log");
 
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(
@@ -861,26 +852,13 @@ printf '%s' "$status"
 `,
       { mode: 0o755 },
     );
-    fs.writeFileSync(
-      path.join(fakeBin, "ollama"),
-      `#!/usr/bin/env bash
-if [ "$1" = "pull" ]; then
-  echo "$2" >> ${JSON.stringify(pullLog)}
-  if [ "$2" = "qwen2.5:7b" ]; then
-    exit 1
-  fi
-  exit 0
-fi
-exit 0
-`,
-      { mode: 0o755 },
-    );
 
     const script = String.raw`
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7", "1", "2", "llama3.2:3b"];
+// "7"=ollama, "http://ai1.lab:11434"=remote URL, "mistral:7b"=model (no installed models)
+const answers = ["7", "http://ai1.lab:11434", "mistral:7b"];
 const messages = [];
 
 credentials.prompt = async (message) => {
@@ -888,11 +866,10 @@ credentials.prompt = async (message) => {
   return answers.shift() || "";
 };
 runner.runCapture = (command) => {
-  if (command.includes("command -v ollama")) return "/usr/bin/ollama";
+  if (command.includes("command -v ollama")) return "";
   if (command.includes("localhost:11434/api/tags")) return JSON.stringify({ models: [] });
   if (command.includes("ollama list")) return "";
   if (command.includes("localhost:8000/v1/models")) return "";
-  if (command.includes("api/generate")) return '{"response":"hello"}';
   return "";
 };
 
@@ -931,17 +908,10 @@ const { setupNim } = require(${onboardPath});
     assert.equal(result.status, 0, result.stderr);
     const payload = JSON.parse(result.stdout.trim());
     assert.equal(payload.result.provider, "ollama-local");
-    assert.equal(payload.result.model, "llama3.2:3b");
-    assert.ok(
-      payload.lines.some((line) => line.includes("Failed to pull Ollama model 'qwen2.5:7b'")),
-    );
-    assert.ok(
-      payload.lines.some((line) =>
-        line.includes("Choose a different Ollama model or select Other."),
-      ),
-    );
-    assert.equal(payload.messages.filter((message) => /Ollama model id:/.test(message)).length, 1);
-    assert.equal(fs.readFileSync(pullLog, "utf8").trim(), "qwen2.5:7b\nllama3.2:3b");
+    assert.equal(payload.result.model, "mistral:7b");
+    assert.equal(payload.result.preferredInferenceApi, "openai-completions");
+    assert.ok(payload.result.endpointUrl.includes("ai1.lab"));
+    assert.ok(payload.lines.some((line) => line.includes("Using Ollama at http://ai1.lab:11434/v1")));
   });
 
   it("reprompts for an OpenAI Other model when /models validation rejects it", () => {
@@ -2709,12 +2679,12 @@ printf '%s' "$status"
       { mode: 0o755 },
     );
 
-    // vLLM is option 7 (build, openai, custom, anthropic, anthropicCompatible, gemini, vllm)
+    // vLLM is option 8 (build, openai, custom, anthropic, anthropicCompatible, gemini, ollama, vllm)
     const script = String.raw`
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
 
-const answers = ["7"];
+const answers = ["8"];
 const messages = [];
 
 credentials.prompt = async (message) => {
@@ -2808,8 +2778,8 @@ printf '%s' "$status"
       { mode: 0o755 },
     );
 
-    // NIM-local is option 7 (build, openai, custom, anthropic, anthropicCompatible, gemini, nim-local)
-    // No ollama, no vLLM — only NIM-local shows up as experimental option
+    // NIM-local is option 8 (build, openai, custom, anthropic, anthropicCompatible, gemini, ollama, nim-local)
+    // No vLLM — only NIM-local shows up as experimental option; ollama is always at position 7
     const script = String.raw`
 const credentials = require(${credentialsPath});
 const runner = require(${runnerPath});
@@ -2822,8 +2792,8 @@ nimMod.containerName = () => "nemoclaw-nim-test";
 nimMod.startNimContainerByName = () => "container-123";
 nimMod.waitForNimHealth = () => true;
 
-// Select option 7 (nim-local), then model 1
-const answers = ["7", "1"];
+// Select option 8 (nim-local), then model 1
+const answers = ["8", "1"];
 const messages = [];
 
 credentials.prompt = async (message) => {

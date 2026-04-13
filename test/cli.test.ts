@@ -150,6 +150,41 @@ describe("CLI dispatch", () => {
     expect(r.out.includes("Unknown onboard option")).toBeFalsy();
   });
 
+  it("accepts --ollama-url in onboard CLI parsing", () => {
+    const r = run("onboard --ollama-url http://localhost:11434 --non-interactiv");
+    expect(r.code).toBe(1);
+    // --ollama-url is known, so only the typo shows as unknown
+    expect(r.out.includes("Unknown onboard option(s): --non-interactiv")).toBeTruthy();
+    expect(r.out.includes("Unknown onboard option(s): --ollama-url")).toBeFalsy();
+  });
+
+  it("accepts --endpoint in onboard CLI parsing", () => {
+    const r = run("onboard --endpoint ollama --non-interactiv");
+    expect(r.code).toBe(1);
+    expect(r.out.includes("Unknown onboard option(s): --non-interactiv")).toBeTruthy();
+    expect(r.out.includes("Unknown onboard option(s): --endpoint")).toBeFalsy();
+  });
+
+  it("accepts --model in onboard CLI parsing", () => {
+    const r = run("onboard --model llama3.1:8b --non-interactiv");
+    expect(r.code).toBe(1);
+    expect(r.out.includes("Unknown onboard option(s): --non-interactiv")).toBeTruthy();
+    expect(r.out.includes("Unknown onboard option(s): --model")).toBeFalsy();
+  });
+
+  it("accepts --api-key in onboard CLI parsing", () => {
+    const r = run("onboard --api-key nvapi-test --non-interactiv");
+    expect(r.code).toBe(1);
+    expect(r.out.includes("Unknown onboard option(s): --non-interactiv")).toBeTruthy();
+    expect(r.out.includes("Unknown onboard option(s): --api-key")).toBeFalsy();
+  });
+
+  it("rejects --ollama-url without a value", () => {
+    const r = run("onboard --ollama-url");
+    expect(r.code).toBe(1);
+    expect(r.out.includes("Option --ollama-url requires a value")).toBeTruthy();
+  });
+
   it("setup forwards unknown options into onboard parsing", () => {
     const r = run("setup --non-interactiv");
     expect(r.code).toBe(1);
@@ -189,7 +224,7 @@ describe("CLI dispatch", () => {
     expect(r.out.includes("--output")).toBeTruthy();
   });
 
-  it("debug --quick exits 0 and produces diagnostic output", { timeout: 15000 }, () => {
+  it("debug --quick exits 0 and produces diagnostic output", { timeout: 30000 }, () => {
     const r = run("debug --quick");
     expect(r.code).toBe(0);
     expect(r.out.includes("Collecting diagnostics")).toBeTruthy();

@@ -70,6 +70,7 @@ interface InferenceProfile {
   credential_env?: string;
   credential_default?: string;
   timeout_secs?: number;
+  dynamic_endpoint?: boolean;
 }
 
 interface SandboxConfig {
@@ -111,6 +112,30 @@ async function openshellAvailable(): Promise<boolean> {
   return result.exitCode === 0;
 }
 
+function normalizeV1(url: string): string {
+  const trimmed = url.replace(/\/+$/, "");
+  return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+}
+
+/** Resolve dynamic endpoint from environment for a given provider type. */
+function resolveDynamicEndpoint(providerType: string): string {
+  if (providerType === "ollama") {
+    const raw = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+    return normalizeV1(raw);
+  }
+  const raw = process.env.OPENAI_BASE_URL ?? "";
+  return raw ? normalizeV1(raw) : "";
+}
+
+/** Extract hostname from an Ollama endpoint URL for policy substitution. */
+function resolveOllamaHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).hostname;
+  } catch {
+    return "localhost";
+  }
+}
+
 /**
  * Resolve inference config and sandbox config from a blueprint, applying
  * endpoint URL override and SSRF validation if provided.
@@ -134,15 +159,37 @@ async function resolveRunConfig(
   if (endpointUrl) {
     await validateEndpointUrl(endpointUrl);
     inferenceCfg = { ...inferenceCfg, endpoint: endpointUrl };
+  } else if (inferenceCfg.dynamic_endpoint) {
+    const resolved = resolveDynamicEndpoint(inferenceCfg.provider_type ?? "openai");
+    if (resolved) {
+      inferenceCfg = { ...inferenceCfg, endpoint: resolved };
+    }
   }
 
-  // Validate the final endpoint (whether from CLI override or blueprint profile)
+  // Validate the final endpoint (whether from CLI override, dynamic resolution, or blueprint profile)
   if (inferenceCfg.endpoint) {
     await validateEndpointUrl(inferenceCfg.endpoint);
   }
 
   const sandboxCfg = blueprint.components?.sandbox ?? {};
   return { inferenceProfiles, inferenceCfg, sandboxCfg };
+}
+
+/**
+ * Resolve ${OLLAMA_HOST} placeholders in policy additions using the actual
+ * Ollama endpoint hostname determined at plan time.
+ */
+function resolvePolicyAdditions(
+  additions: Record<string, unknown>,
+  providerType: string | undefined,
+  endpoint: string | undefined,
+): Record<string, unknown> {
+  if (providerType !== "ollama" || !endpoint) return additions;
+  const host = resolveOllamaHost(endpoint);
+  return JSON.parse(JSON.stringify(additions).replace(/\$\{OLLAMA_HOST\}/g, host)) as Record<
+    string,
+    unknown
+  >;
 }
 
 // ── Actions ─────────────────────────────────────────────────────
@@ -202,7 +249,11 @@ export async function actionPlan(
       model: inferenceCfg.model,
       credential_env: inferenceCfg.credential_env,
     },
-    policy_additions: blueprint.components?.policy?.additions ?? {},
+    policy_additions: resolvePolicyAdditions(
+      blueprint.components?.policy?.additions ?? {},
+      inferenceCfg.provider_type,
+      inferenceCfg.endpoint,
+    ),
     dry_run: options?.dryRun ?? false,
   };
 
@@ -287,7 +338,8 @@ export async function actionApply(
     providerArgs.push("--credential", "OPENAI_API_KEY");
   }
   if (endpoint) {
-    providerArgs.push("--config", `OPENAI_BASE_URL=${endpoint}`);
+    const baseUrlKey = providerType === "ollama" ? "OLLAMA_BASE_URL" : "OPENAI_BASE_URL";
+    providerArgs.push("--config", `${baseUrlKey}=${endpoint}`);
   }
 
   await execa(providerArgs[0], providerArgs.slice(1), {

@@ -9,6 +9,8 @@ import {
   runOnboardCommand,
 } from "./onboard-command";
 
+const NULL_OLLAMA_OPTS = { endpoint: null, model: null, endpointUrl: null, apiKey: null };
+
 describe("onboard command", () => {
   it("parses onboard flags", () => {
     expect(
@@ -32,6 +34,7 @@ describe("onboard command", () => {
       acceptThirdPartySoftware: true,
       agent: null,
       dangerouslySkipPermissions: false,
+      ...NULL_OLLAMA_OPTS,
     });
   });
 
@@ -57,6 +60,7 @@ describe("onboard command", () => {
       acceptThirdPartySoftware: true,
       agent: null,
       dangerouslySkipPermissions: false,
+      ...NULL_OLLAMA_OPTS,
     });
   });
 
@@ -81,6 +85,7 @@ describe("onboard command", () => {
       acceptThirdPartySoftware: false,
       agent: null,
       dangerouslySkipPermissions: false,
+      ...NULL_OLLAMA_OPTS,
     });
   });
 
@@ -103,6 +108,7 @@ describe("onboard command", () => {
     expect(lines.join("\n")).toContain("Usage: nemoclaw onboard");
     expect(lines.join("\n")).toContain("--from <Dockerfile>");
     expect(lines.join("\n")).toContain("--agent <name>");
+    expect(lines.join("\n")).toContain("--ollama-url <url>");
     expect(lines.join("\n")).toContain("--dangerously-skip-permissions");
   });
 
@@ -128,6 +134,7 @@ describe("onboard command", () => {
       acceptThirdPartySoftware: false,
       agent: null,
       dangerouslySkipPermissions: false,
+      ...NULL_OLLAMA_OPTS,
     });
   });
 
@@ -191,6 +198,7 @@ describe("onboard command", () => {
       acceptThirdPartySoftware: false,
       agent: "openclaw",
       dangerouslySkipPermissions: true,
+      ...NULL_OLLAMA_OPTS,
     });
   });
 
@@ -213,6 +221,54 @@ describe("onboard command", () => {
     ).toThrow("exit:1");
     expect(errors.join("\n")).toContain("Unknown agent 'bogus'");
     expect(errors.join("\n")).toContain("Usage: nemoclaw onboard");
+  });
+
+  it("parses --ollama-url, --endpoint, --model, --api-key", () => {
+    expect(
+      parseOnboardArgs(
+        ["--ollama-url", "http://ai1.lab:11434", "--endpoint", "ollama", "--model", "llama3.1:8b", "--api-key", "test-key"],
+        "--yes-i-accept-third-party-software",
+        "NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE",
+        {
+          env: {},
+          error: () => {},
+          exit: ((code: number) => {
+            throw new Error(String(code));
+          }) as never,
+        },
+      ),
+    ).toEqual({
+      nonInteractive: false,
+      resume: false,
+      recreateSandbox: false,
+      fromDockerfile: null,
+      acceptThirdPartySoftware: false,
+      agent: null,
+      dangerouslySkipPermissions: false,
+      endpoint: "ollama",
+      model: "llama3.1:8b",
+      endpointUrl: "http://ai1.lab:11434",
+      apiKey: "test-key",
+    });
+  });
+
+  it("rejects --ollama-url without a value", () => {
+    const errors: string[] = [];
+    expect(() =>
+      parseOnboardArgs(
+        ["--ollama-url"],
+        "--yes-i-accept-third-party-software",
+        "NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE",
+        {
+          env: {},
+          error: (message = "") => errors.push(message),
+          exit: ((code: number) => {
+            throw new Error(`exit:${code}`);
+          }) as never,
+        },
+      ),
+    ).toThrow("exit:1");
+    expect(errors.join("\n")).toContain("Option --ollama-url requires a value");
   });
 
   it("prints the setup-spark deprecation text before delegating", async () => {
@@ -242,6 +298,7 @@ describe("onboard command", () => {
       acceptThirdPartySoftware: false,
       agent: null,
       dangerouslySkipPermissions: false,
+      ...NULL_OLLAMA_OPTS,
     });
   });
 

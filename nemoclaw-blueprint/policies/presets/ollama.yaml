@@ -25,3 +25,4 @@ network_policies:
           - allow: { method: POST, path: "/api/**" }
           - allow: { method: GET, path: "/v1/**" }
           - allow: { method: POST, path: "/v1/**" }
+    binaries: []

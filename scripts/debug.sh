@@ -344,13 +344,15 @@ if [ "$QUICK" = false ]; then
   fi
 fi
 
-# -- dmesg (always, last 100 lines) --
+# -- dmesg (full mode only — log show is slow on macOS) --
 
-section "Kernel Messages"
-if [ "$IS_MACOS" = true ]; then
-  collect "system-log" sh -c 'log show --last 5m --predicate "eventType == logEvent" --style compact 2>/dev/null | tail -100'
-else
-  collect "dmesg" sh -c 'dmesg | tail -100'
+if [ "$QUICK" = false ]; then
+  section "Kernel Messages"
+  if [ "$IS_MACOS" = true ]; then
+    collect "system-log" sh -c 'log show --last 5m --predicate "eventType == logEvent" --style compact 2>/dev/null | tail -100'
+  else
+    collect "dmesg" sh -c 'dmesg | tail -100'
+  fi
 fi
 
 # ── Produce tarball if requested ─────────────────────────────────

@@ -32,6 +32,7 @@ const { DASHBOARD_PORT, GATEWAY_PORT, VLLM_PORT, OLLAMA_PORT } = require("./port
 const {
   getDefaultOllamaModel,
   getBootstrapOllamaModelOptions,
+  HOST_GATEWAY_URL,
   getLocalProviderBaseUrl,
   getLocalProviderValidationBaseUrl,
   getOllamaModelOptions,
@@ -2861,7 +2862,7 @@ async function createSandbox(
 // ── Step 3: Inference selection ──────────────────────────────────
 
 // eslint-disable-next-line complexity
-async function setupNim(gpu) {
+async function setupNim(gpu, opts = null) {
   step(3, 8, "Configuring inference (NIM)");
 
   let model = null;
@@ -2879,10 +2880,21 @@ async function setupNim(gpu) {
   const vllmRunning = !!runCapture(`curl -sf http://localhost:${VLLM_PORT}/v1/models 2>/dev/null`, {
     ignoreError: true,
   });
-  const requestedProvider = isNonInteractive() ? getNonInteractiveProvider() : null;
-  const requestedModel = isNonInteractive()
-    ? getNonInteractiveModel(requestedProvider || "build")
-    : null;
+  // --endpoint flag takes priority over NEMOCLAW_PROVIDER env var
+  const requestedProvider =
+    (opts && opts.endpoint) || (isNonInteractive() ? getNonInteractiveProvider() : null);
+  // --model flag takes priority over NEMOCLAW_MODEL env var
+  const requestedModel =
+    (opts && opts.model) ||
+    (isNonInteractive() ? getNonInteractiveModel(requestedProvider || "build") : null);
+
+  // Non-interactive fast-path for Ollama: no credentials required, skip menu.
+  if (requestedProvider === "ollama") {
+    provider = "ollama-local";
+    model = requestedModel || "llama3.1:8b";
+    return { model, provider, endpointUrl, credentialEnv, preferredInferenceApi, nimContainer };
+  }
+
   const options = [];
   options.push({ key: "build", label: "NVIDIA Endpoints" });
   options.push({ key: "openai", label: "OpenAI" });
@@ -2890,14 +2902,11 @@ async function setupNim(gpu) {
   options.push({ key: "anthropic", label: "Anthropic" });
   options.push({ key: "anthropicCompatible", label: "Other Anthropic-compatible endpoint" });
   options.push({ key: "gemini", label: "Google Gemini" });
-  if (hasOllama || ollamaRunning) {
-    options.push({
-      key: "ollama",
-      label:
-        `Local Ollama (localhost:${OLLAMA_PORT})${ollamaRunning ? " — running" : ""}` +
-        (ollamaRunning ? " (suggested)" : ""),
-    });
-  }
+  // Always show Ollama — supports local and remote endpoints without requiring a local install
+  options.push({
+    key: "ollama",
+    label: `Ollama — local or remote${ollamaRunning ? " (localhost detected)" : ""}`,
+  });
   if (EXPERIMENTAL && gpu && gpu.nimCapable) {
     options.push({ key: "nim-local", label: "Local NVIDIA NIM [experimental]" });
   }
@@ -3311,61 +3320,41 @@ async function setupNim(gpu) {
         }
         break;
       } else if (selected.key === "ollama") {
-        if (!ollamaRunning) {
-          console.log("  Starting Ollama...");
-          // On WSL2, binding to 0.0.0.0 creates a dual-stack socket that Docker
-          // cannot reach via host-gateway. The default 127.0.0.1 binding works
-          // because WSL2 relays IPv4-only sockets to the Windows host.
-          const ollamaEnv = isWsl() ? "" : `OLLAMA_HOST=0.0.0.0:${OLLAMA_PORT} `;
-          run(`${ollamaEnv}ollama serve > /dev/null 2>&1 &`, { ignoreError: true });
-          sleep(2);
+        // Prompt for endpoint URL (supports remote Ollama via --ollama-url or OLLAMA_BASE_URL)
+        const defaultUrl = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+        let resolvedUrl: string;
+        if (isNonInteractive()) {
+          resolvedUrl = defaultUrl;
+        } else {
+          const urlInput = await prompt(`  Ollama endpoint URL [${defaultUrl}]: `);
+          resolvedUrl = urlInput.trim() || defaultUrl;
         }
-        console.log(`  ✓ Using Ollama on localhost:${OLLAMA_PORT}`);
+        // Normalise: strip trailing /v1 and re-append so the URL is always /v1-suffixed
+        resolvedUrl = resolvedUrl.replace(/\/v1\/?$/, "") + "/v1";
+        if (opts) opts.endpointUrl = resolvedUrl;
+        console.log(`  ✓ Using Ollama at ${resolvedUrl}`);
         provider = "ollama-local";
         credentialEnv = "OPENAI_API_KEY";
-        endpointUrl = getLocalProviderBaseUrl(provider);
+        endpointUrl = resolvedUrl;
         while (true) {
-          const installedModels = getOllamaModelOptions(runCapture);
           if (isNonInteractive()) {
             model = requestedModel || getDefaultOllamaModel(runCapture, gpu);
           } else {
-            model = await promptOllamaModel(gpu);
+            const installedModels = getOllamaModelOptions(runCapture);
+            if (installedModels.length > 0) {
+              model = await promptOllamaModel(gpu);
+            } else {
+              console.log("  No local Ollama models found. Enter a model name (it must be available at the endpoint).");
+              model = await prompt("  Ollama model id (e.g. llama3.1:8b): ");
+            }
           }
           if (model === BACK_TO_SELECTION) {
             console.log("  Returning to provider selection.");
             console.log("");
             continue selectionLoop;
           }
-          const probe = prepareOllamaModel(model, installedModels);
-          if (!probe.ok) {
-            console.error(`  ${probe.message}`);
-            if (isNonInteractive()) {
-              process.exit(1);
-            }
-            console.log("  Choose a different Ollama model or select Other.");
-            console.log("");
-            continue;
-          }
-          const validation = await validateOpenAiLikeSelection(
-            "Local Ollama",
-            getLocalProviderValidationBaseUrl(provider),
-            model,
-            null,
-            "Choose a different Ollama model or select Other.",
-          );
-          if (validation.retry === "selection" || validation.retry === "back") {
-            continue selectionLoop;
-          }
-          if (!validation.ok) {
-            continue;
-          }
           // Ollama's /v1/responses endpoint does not produce correctly
           // formatted tool calls — force chat completions like vLLM/NIM.
-          if (validation.api !== "openai-completions") {
-            console.log(
-              "  ℹ Using chat completions API (Ollama tool calls require /v1/chat/completions)",
-            );
-          }
           preferredInferenceApi = "openai-completions";
           break;
         }
@@ -3491,6 +3480,15 @@ async function setupNim(gpu) {
 
 // ── Step 4: Inference provider ───────────────────────────────────
 
+// ── Step 4: Inference provider ───────────────────────────────────
+
+function resolveOllamaBaseUrl(opts) {
+  const raw =
+    (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || `${HOST_GATEWAY_URL}:11434`;
+  // Ensure exactly one /v1 suffix
+  return raw.replace(/\/v1\/?$/, "") + "/v1";
+}
+
 // eslint-disable-next-line complexity
 async function setupInference(
   sandboxName,
@@ -3498,6 +3496,7 @@ async function setupInference(
   provider,
   endpointUrl = null,
   credentialEnv = null,
+  opts = null,
 ) {
   step(4, 8, "Setting up inference provider");
   runOpenshell(["gateway", "select", GATEWAY_NAME], { ignoreError: true });
@@ -3605,37 +3604,36 @@ async function setupInference(
       String(LOCAL_INFERENCE_TIMEOUT_SECS),
     ]);
   } else if (provider === "ollama-local") {
-    const validation = validateLocalProvider(provider, runCapture);
-    if (!validation.ok) {
-      console.error(`  ${validation.message}`);
-      console.error("  On macOS, local inference also depends on OpenShell host routing support.");
-      process.exit(1);
-    }
-    const baseUrl = getLocalProviderBaseUrl(provider);
-    const providerResult = upsertProvider("ollama-local", "openai", "OPENAI_API_KEY", baseUrl, {
+    // Use opts.endpointUrl or OLLAMA_BASE_URL to support remote Ollama endpoints.
+    // validateLocalProvider is intentionally skipped — the endpoint may be remote.
+    const ollamaUrl = resolveOllamaBaseUrl(opts);
+    const providerResult = upsertProvider("ollama-local", "ollama", "OPENAI_API_KEY", ollamaUrl, {
       OPENAI_API_KEY: "ollama",
     });
     if (!providerResult.ok) {
       console.error(`  ${providerResult.message}`);
       process.exit(providerResult.status || 1);
     }
-    runOpenshell([
-      "inference",
-      "set",
-      "--no-verify",
-      "--provider",
-      "ollama-local",
-      "--model",
-      model,
-      "--timeout",
-      String(LOCAL_INFERENCE_TIMEOUT_SECS),
-    ]);
-    console.log(`  Priming Ollama model: ${model}`);
-    run(getOllamaWarmupCommand(model), { ignoreError: true });
-    const probe = validateOllamaModel(model, runCapture);
-    if (!probe.ok) {
-      console.error(`  ${probe.message}`);
-      process.exit(1);
+    const applyResult = runOpenshell(
+      [
+        "inference",
+        "set",
+        "--no-verify",
+        "--provider",
+        "ollama-local",
+        "--model",
+        model,
+        "--timeout",
+        String(LOCAL_INFERENCE_TIMEOUT_SECS),
+      ],
+      { ignoreError: true },
+    );
+    if (applyResult.status !== 0) {
+      const message =
+        compactText(`${applyResult.stderr || ""} ${applyResult.stdout || ""}`) ||
+        "Failed to configure Ollama inference provider.";
+      console.error(`  Warning: ${message}`);
+      console.error("  Run `nemoclaw onboard` again once the Ollama endpoint is reachable.");
     }
   }
 
@@ -3879,9 +3877,17 @@ async function setupMessagingChannels() {
   return selected;
 }
 
-function getSuggestedPolicyPresets({ enabledChannels = null, webSearchConfig = null } = {}) {
+function getSuggestedPolicyPresets({ enabledChannels = null, webSearchConfig = null, ollamaHost = null } = {}) {
   const suggestions = ["pypi", "npm"];
   const usesExplicitMessagingSelection = Array.isArray(enabledChannels);
+
+  if (ollamaHost) {
+    suggestions.push("ollama");
+    const hostLabel = ollamaHost !== "localhost" ? ` (${ollamaHost})` : "";
+    if (process.stdout.isTTY && !isNonInteractive() && process.env.CI !== "true") {
+      console.log(`  Auto-detected: Ollama provider → suggesting ollama preset${hostLabel}`);
+    }
+  }
 
   const maybeSuggestMessagingPreset = (channel, envKey) => {
     if (usesExplicitMessagingSelection) {
@@ -3903,6 +3909,16 @@ function getSuggestedPolicyPresets({ enabledChannels = null, webSearchConfig = n
   if (webSearchConfig) suggestions.push("brave");
 
   return suggestions;
+}
+
+function resolveOllamaHost(opts) {
+  const raw = (opts && opts.endpointUrl) || process.env.OLLAMA_BASE_URL || "";
+  if (!raw) return null;
+  try {
+    return new URL(raw).hostname || "localhost";
+  } catch {
+    return "localhost";
+  }
 }
 
 // ── Step 7: OpenClaw ─────────────────────────────────────────────
@@ -3934,8 +3950,9 @@ async function setupOpenclaw(sandboxName, model, provider) {
 // ── Step 7: Policy presets ───────────────────────────────────────
 
 // eslint-disable-next-line complexity
-async function _setupPolicies(sandboxName, options = {}) {
+async function _setupPolicies(sandboxName, options: { ollamaHost?: string | null; enabledChannels?: string[] | null; webSearchConfig?: unknown; [key: string]: unknown } = {}) {
   step(8, 8, "Policy presets");
+  const { ollamaHost = null } = options;
   const suggestions = getSuggestedPolicyPresets(options);
 
   const allPresets = policies.listPresets();
@@ -3979,25 +3996,11 @@ async function _setupPolicies(sandboxName, options = {}) {
       process.exit(1);
     }
     note(`  [non-interactive] Applying policy presets: ${selectedPresets.join(", ")}`);
-    for (const name of selectedPresets) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          policies.applyPreset(sandboxName, name);
-          break;
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (message.includes("Unimplemented")) {
-            console.error("  OpenShell policy updates are not supported by this gateway build.");
-            console.error("  This is a known issue tracked in NemoClaw #536.");
-            throw err;
-          }
-          if (!message.includes("sandbox not found") || attempt === 2) {
-            throw err;
-          }
-          sleep(2);
-        }
-      }
-    }
+    const presetArgs = selectedPresets.map((name) => ({
+      name,
+      vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+    }));
+    policies.applyPresets(sandboxName, presetArgs);
   } else {
     console.log("");
     console.log("  Available policy presets:");
@@ -4022,40 +4025,19 @@ async function _setupPolicies(sandboxName, options = {}) {
       process.exit(1);
     }
 
+    let chosen = suggestions;
     if (answer.toLowerCase() === "list") {
-      // Let user pick
       const picks = await prompt("  Enter preset names (comma-separated): ");
-      const selected = picks
+      chosen = picks
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
-      for (const name of selected) {
-        try {
-          policies.applyPreset(sandboxName, name);
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (message.includes("Unimplemented")) {
-            console.error("  OpenShell policy updates are not supported by this gateway build.");
-            console.error("  This is a known issue tracked in NemoClaw #536.");
-          }
-          throw err;
-        }
-      }
-    } else {
-      // Apply suggested
-      for (const name of suggestions) {
-        try {
-          policies.applyPreset(sandboxName, name);
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (message.includes("Unimplemented")) {
-            console.error("  OpenShell policy updates are not supported by this gateway build.");
-            console.error("  This is a known issue tracked in NemoClaw #536.");
-          }
-          throw err;
-        }
-      }
     }
+    const presetArgs = chosen.map((name) => ({
+      name,
+      vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+    }));
+    policies.applyPresets(sandboxName, presetArgs);
   }
 
   console.log("  ✓ Policies applied");
@@ -4506,8 +4488,18 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
   const onSelection = typeof options.onSelection === "function" ? options.onSelection : null;
   const webSearchConfig = options.webSearchConfig || null;
   const enabledChannels = Array.isArray(options.enabledChannels) ? options.enabledChannels : null;
+  const ollamaHost = options.ollamaHost || null;
 
   step(8, 8, "Policy presets");
+
+  const suggestions = getSuggestedPolicyPresets({ enabledChannels, webSearchConfig, ollamaHost });
+
+  const makePresetArgs = (names: string[]) =>
+    names.map((name) => ({
+      name,
+      vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+    }));
+
 
   const allPresets = policies.listPresets();
   const applied = policies.getAppliedPresets(sandboxName);
@@ -4521,9 +4513,9 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
       process.exit(1);
     }
     note(`  [resume] Reapplying policy presets: ${chosen.join(", ")}`);
-    for (const name of chosen) {
-      if (applied.includes(name)) continue;
-      policies.applyPreset(sandboxName, name);
+    const unapplied = chosen.filter((name) => !applied.includes(name));
+    if (unapplied.length > 0) {
+      policies.applyPresets(sandboxName, makePresetArgs(unapplied));
     }
     return chosen;
   }
@@ -4573,25 +4565,7 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
       process.exit(1);
     }
     note(`  [non-interactive] Applying policy presets: ${chosen.join(", ")}`);
-    for (const name of chosen) {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          policies.applyPreset(sandboxName, name);
-          break;
-        } catch (err) {
-          const message = err && err.message ? err.message : String(err);
-          if (message.includes("Unimplemented")) {
-            console.error("  OpenShell policy updates are not supported by this gateway build.");
-            console.error("  This is a known issue tracked in NemoClaw #536.");
-            throw err;
-          }
-          if (!message.includes("sandbox not found") || attempt === 2) {
-            throw err;
-          }
-          sleep(2);
-        }
-      }
-    }
+    policies.applyPresets(sandboxName, makePresetArgs(chosen));
     return chosen;
   }
 
@@ -4616,26 +4590,15 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
   const accessByName = {};
   for (const p of resolvedPresets) accessByName[p.name] = p.access;
   const newlySelected = interactiveChoice.filter((name) => !applied.includes(name));
-  for (const name of newlySelected) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        // Pass access mode so applyPreset can distinguish read vs read-write
-        // when preset infrastructure supports it.
-        policies.applyPreset(sandboxName, name, { access: accessByName[name] });
-        break;
-      } catch (err) {
-        const message = err && err.message ? err.message : String(err);
-        if (message.includes("Unimplemented")) {
-          console.error("  OpenShell policy updates are not supported by this gateway build.");
-          console.error("  This is a known issue tracked in NemoClaw #536.");
-          throw err;
-        }
-        if (!message.includes("sandbox not found") || attempt === 2) {
-          throw err;
-        }
-        sleep(2);
-      }
-    }
+  if (newlySelected.length > 0) {
+    policies.applyPresets(
+      sandboxName,
+      newlySelected.map((name) => ({
+        name,
+        vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
+        access: accessByName[name],
+      })),
+    );
   }
   return interactiveChoice;
 }
@@ -5121,7 +5084,7 @@ async function onboard(opts = {}) {
         hydrateCredentialEnv(credentialEnv);
       } else {
         startRecordedStep("provider_selection", { sandboxName });
-        const selection = await setupNim(gpu);
+        const selection = await setupNim(gpu, opts);
         model = selection.model;
         provider = selection.provider;
         endpointUrl = selection.endpointUrl;
@@ -5167,6 +5130,7 @@ async function onboard(opts = {}) {
         provider,
         endpointUrl,
         credentialEnv,
+        opts,
       );
       delete process.env.NVIDIA_API_KEY;
       if (inferenceResult?.retry === "selection") {
@@ -5317,6 +5281,7 @@ async function onboard(opts = {}) {
               : null,
           enabledChannels: selectedMessagingChannels,
           webSearchConfig,
+          ollamaHost: provider === "ollama-local" ? resolveOllamaHost(opts) : null,
           onSelection: (policyPresets) => {
             onboardSession.updateSession((current) => {
               current.policyPresets = policyPresets;

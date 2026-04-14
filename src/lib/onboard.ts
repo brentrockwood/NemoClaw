@@ -4492,14 +4492,11 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
 
   step(8, 8, "Policy presets");
 
-  const suggestions = getSuggestedPolicyPresets({ enabledChannels, webSearchConfig, ollamaHost });
-
   const makePresetArgs = (names: string[]) =>
     names.map((name) => ({
       name,
       vars: name === "ollama" && ollamaHost ? { host: ollamaHost } : undefined,
     }));
-
 
   const allPresets = policies.listPresets();
   const applied = policies.getAppliedPresets(sandboxName);
@@ -4527,6 +4524,15 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
   const suggestions = tiers.resolveTierPresets(tierName).map((p) => p.name);
   // Allow credential-based overrides on top of the tier (additive only).
   if (webSearchConfig && !suggestions.includes("brave")) suggestions.push("brave");
+  if (ollamaHost && !suggestions.includes("ollama")) suggestions.push("ollama");
+  const maybeSuggestMessaging = (name, envKey) => {
+    const inChannels = Array.isArray(enabledChannels) && enabledChannels.includes(name);
+    const hasCred = getCredential(envKey) || process.env[envKey];
+    if ((inChannels || hasCred) && !suggestions.includes(name)) suggestions.push(name);
+  };
+  maybeSuggestMessaging("telegram", "TELEGRAM_BOT_TOKEN");
+  maybeSuggestMessaging("slack", "SLACK_BOT_TOKEN");
+  maybeSuggestMessaging("discord", "DISCORD_BOT_TOKEN");
 
   if (isNonInteractive()) {
     const policyMode = (process.env.NEMOCLAW_POLICY_MODE || "suggested").trim().toLowerCase();

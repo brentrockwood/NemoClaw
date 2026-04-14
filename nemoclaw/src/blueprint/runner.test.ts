@@ -260,6 +260,106 @@ describe("runner", () => {
     });
   });
 
+  describe("actionPlan — Ollama dynamic endpoint", () => {
+    beforeEach(() => {
+      captureStdout();
+      mockExeca.mockResolvedValue({ exitCode: 0 });
+    });
+
+    function ollamaBlueprint(additions: Record<string, unknown> = {}): Record<string, unknown> {
+      return {
+        components: {
+          inference: {
+            profiles: {
+              ollama: {
+                provider_type: "ollama",
+                provider_name: "ollama-local",
+                dynamic_endpoint: true,
+                credential_default: "ollama",
+              },
+            },
+          },
+          sandbox: { name: "sb" },
+          policy: { additions },
+        },
+      };
+    }
+
+    it("resolves OLLAMA_BASE_URL into the plan endpoint", async () => {
+      process.env.OLLAMA_BASE_URL = "http://ai1.lab:11434";
+      try {
+        const plan = await actionPlan("ollama", ollamaBlueprint());
+        expect(plan.inference.endpoint).toBe("http://ai1.lab:11434/v1");
+        expect(mockedValidateEndpoint).toHaveBeenCalledWith("http://ai1.lab:11434/v1");
+      } finally {
+        delete process.env.OLLAMA_BASE_URL;
+      }
+    });
+
+    it("appends /v1 when OLLAMA_BASE_URL already ends with /v1", async () => {
+      process.env.OLLAMA_BASE_URL = "http://ai1.lab:11434/v1";
+      try {
+        const plan = await actionPlan("ollama", ollamaBlueprint());
+        expect(plan.inference.endpoint).toBe("http://ai1.lab:11434/v1");
+      } finally {
+        delete process.env.OLLAMA_BASE_URL;
+      }
+    });
+
+    it("defaults to localhost:11434/v1 when OLLAMA_BASE_URL is not set", async () => {
+      delete process.env.OLLAMA_BASE_URL;
+      const plan = await actionPlan("ollama", ollamaBlueprint());
+      expect(plan.inference.endpoint).toBe("http://localhost:11434/v1");
+    });
+
+    it("substitutes ${OLLAMA_HOST} in policy additions", async () => {
+      process.env.OLLAMA_BASE_URL = "http://ai1.lab:11434";
+      try {
+        const additions = {
+          ollama_service: { endpoints: [{ host: "${OLLAMA_HOST}", port: 11434 }] },
+        };
+        const plan = await actionPlan("ollama", ollamaBlueprint(additions));
+        const serialized = JSON.stringify(plan.policy_additions);
+        expect(serialized).toContain("ai1.lab");
+        expect(serialized).not.toContain("${OLLAMA_HOST}");
+      } finally {
+        delete process.env.OLLAMA_BASE_URL;
+      }
+    });
+
+    it("falls back to localhost for ${OLLAMA_HOST} when endpoint URL is malformed", async () => {
+      const bp = {
+        components: {
+          inference: {
+            profiles: {
+              ollama: {
+                provider_type: "ollama",
+                endpoint: "not-a-valid-url",
+                credential_default: "ollama",
+              },
+            },
+          },
+          sandbox: { name: "sb" },
+          policy: {
+            additions: { ollama_service: { host: "${OLLAMA_HOST}" } },
+          },
+        },
+      };
+      const plan = await actionPlan("ollama", bp);
+      expect(JSON.stringify(plan.policy_additions)).toContain("localhost");
+    });
+
+    it("leaves non-ollama policy additions unchanged", async () => {
+      const additions = { my_service: { host: "${OLLAMA_HOST}" } };
+      // provider_type is openai — resolvePolicyAdditions should be a no-op
+      const plan = await actionPlan("default", {
+        ...minimalBlueprint(),
+        components: { ...minimalBlueprint().components, policy: { additions } },
+      });
+      expect(JSON.stringify(plan.policy_additions)).toContain("${OLLAMA_HOST}");
+    });
+  });
+
   describe("actionApply", () => {
     beforeEach(() => {
       captureStdout();

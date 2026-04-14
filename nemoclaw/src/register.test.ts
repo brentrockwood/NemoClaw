@@ -10,8 +10,13 @@ vi.mock("./onboard/config.js", () => ({
   describeOnboardProvider: vi.fn(() => "NVIDIA Endpoint API"),
 }));
 
+vi.mock("./commands/slash.js", () => ({
+  handleSlashCommand: vi.fn(() => Promise.resolve({ type: "text", text: "ok" })),
+}));
+
 import register, { getPluginConfig } from "./index.js";
 import { loadOnboardConfig } from "./onboard/config.js";
+import { handleSlashCommand } from "./commands/slash.js";
 
 const mockedLoadOnboardConfig = vi.mocked(loadOnboardConfig);
 
@@ -76,6 +81,26 @@ describe("plugin registration", () => {
     expect(providerArg.models?.chat).toEqual([
       expect.objectContaining({ id: "inference/nvidia/custom-model" }),
     ]);
+  });
+
+  it("invokes handleSlashCommand when the registered slash command handler is called", async () => {
+    const api = createMockApi();
+    register(api);
+    const [cmd] = vi.mocked(api.registerCommand).mock.calls[0];
+    const ctx = { id: "ctx-1" };
+    await cmd.handler(ctx);
+    expect(handleSlashCommand).toHaveBeenCalledWith(ctx, api);
+  });
+
+  it("logs a warning when api.on() throws during hook registration", () => {
+    const api = createMockApi();
+    vi.mocked(api.on).mockImplementation(() => {
+      throw new Error("hook not supported by this host");
+    });
+    register(api);
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Could not register secret scanner hook"),
+    );
   });
 });
 
